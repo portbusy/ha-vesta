@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Climate Pro Configuration",
+        "description": "Configure your radiator as a Tado-like smart device.",
+        "data": {
+          "name": "Integration Name",
+          "heater": "Heater Entity (TRV, Switch, etc.)",
+          "target_sensor": "Room Temperature Sensor",
+          "window_sensor": "Window/Door Sensor (Optional)",
+          "presence_sensor": "Presence/Person Sensor (Optional)",
+          "schedule_entity": "Schedule Entity (Optional)",
+          "comfort_temp": "Comfort Temperature (°C)",
+          "eco_temp": "Eco Temperature (°C)"
+        }
+      }
+    }
+  }
+}
