@@ -1,7 +1,6 @@
 # 🏛️ Vesta
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
-[![Open Vesta on Home Assistant Community Store (HACS).](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=portbusy&repository=ha-vesta&category=integration)
 [![GitHub Release](https://img.shields.io/github/v/release/portbusy/ha-vesta?style=for-the-badge)](https://github.com/portbusy/ha-vesta/releases)
 [![License](https://img.shields.io/github/license/portbusy/ha-vesta?style=for-the-badge)](LICENSE)
 ![Maintainer](https://img.shields.io/badge/maintainer-%40portbusy-blue?style=for-the-badge)
@@ -32,6 +31,8 @@
 ### Option 2: Manual
 1. Copy the `custom_components/vesta` folder into your Home Assistant's `custom_components` directory.
 2. Restart Home Assistant.
+
+[![Open Vesta on Home Assistant Community Store (HACS).](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=portbusy&repository=ha-vesta&category=integration)
 
 ## ⚙️ Configuration
 
