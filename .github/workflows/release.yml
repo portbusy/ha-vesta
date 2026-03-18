@@ -1,26 +1,26 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
 
 jobs:
   release:
+    name: Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Create Zip
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: ZIP the integration directory
         run: |
-          cd custom_components
-          zip vesta.zip -r vesta
-          mv vesta.zip ..
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+          cd custom_components/vesta
+          zip vesta.zip -r ./
+          mv vesta.zip ../../
+      - name: Upload zip to release
+        uses: svenstaro/upload-release-action@v2
         with:
-          files: vesta.zip
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: vesta.zip
+          asset_name: vesta.zip
+          tag: ${{ github.ref }}
+          overwrite: true

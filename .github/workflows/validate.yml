@@ -2,33 +2,21 @@ name: Validate
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
+  schedule:
+    - cron: "0 0 * * *"
 
 jobs:
-  hacs:
-    name: HACS Validation
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: HACS Action
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: HACS validation
         uses: hacs/action@main
         with:
           category: integration
-
-  lint:
-    name: Linting
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Home Assistant Core Integration Validation
+        uses: home-assistant/actions/core-integration-validation@main
         with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff
-      - name: Run Ruff
-        run: ruff check custom_components/vesta
+          integration: vesta
