@@ -21,6 +21,8 @@
 
 ## 🚀 Installation
 
+[![Open Vesta on Home Assistant Community Store (HACS).](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=portbusy&repository=ha-vesta&category=integration)
+
 ### Option 1: HACS (Recommended)
 1. Open **HACS** in Home Assistant.
 2. Click the three dots in the top right and select **Custom repositories**.
@@ -32,7 +34,6 @@
 1. Copy the `custom_components/vesta` folder into your Home Assistant's `custom_components` directory.
 2. Restart Home Assistant.
 
-[![Open Vesta on Home Assistant Community Store (HACS).](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=portbusy&repository=ha-vesta&category=integration)
 
 ## ⚙️ Configuration
 
