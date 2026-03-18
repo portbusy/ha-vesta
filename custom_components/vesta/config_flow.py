@@ -147,15 +147,11 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> SmartClimateProOptionsFlow:
         """Get the options flow."""
-        return SmartClimateProOptionsFlow(config_entry)
+        return SmartClimateProOptionsFlow()
 
 
 class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for Vesta."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
