@@ -1,0 +1,26 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Zip
+        run: |
+          cd custom_components
+          zip vesta.zip -r vesta
+          mv vesta.zip ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vesta.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

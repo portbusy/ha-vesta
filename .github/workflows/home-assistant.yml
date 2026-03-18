@@ -1,0 +1,17 @@
+name: Home Assistant Core Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Home Assistant Core Integration Validation
+        uses: home-assistant/actions/core-integration-validation@main
+        with:
+          integration: vesta
