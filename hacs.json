@@ -1,0 +1,7 @@
+{
+  "name": "Vesta",
+  "content_builder": "integration",
+  "render_readme": true,
+  "country": "IT",
+  "homeassistant": "2024.1.0"
+}
