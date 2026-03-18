@@ -42,7 +42,10 @@ from .const import (
 
 # --- Temp selector builder ---
 
-def _temp_selector(min_val: float = 5.0, max_val: float = 35.0, step: float = 0.5) -> selector.NumberSelector:
+
+def _temp_selector(
+    min_val: float = 5.0, max_val: float = 35.0, step: float = 0.5
+) -> selector.NumberSelector:
     """Create a temperature NumberSelector."""
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
@@ -55,7 +58,19 @@ def _temp_selector(min_val: float = 5.0, max_val: float = 35.0, step: float = 0.
     )
 
 
+# --- Helper to get global config entry ---
+
+
+def _get_global_entry(hass) -> config_entries.ConfigEntry | None:
+    """Return the existing global config entry, if any."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_GLOBAL:
+            return entry
+    return None
+
+
 # --- Override helpers ---
+
 
 def _flatten_overrides(user_input: dict[str, Any]) -> dict[str, Any]:
     """Flatten the nested 'overrides' section into top-level keys."""
@@ -68,7 +83,9 @@ def _flatten_overrides(user_input: dict[str, Any]) -> dict[str, Any]:
 def _validate_overrides(user_input: dict[str, Any], errors: dict[str, str]) -> None:
     """Validate that if an override is enabled, the corresponding entity is provided."""
     overrides = user_input.get("overrides") or {}
-    if overrides.get(CONF_OVERRIDE_PRESENCE) and not overrides.get(CONF_PRESENCE_SENSORS):
+    if overrides.get(CONF_OVERRIDE_PRESENCE) and not overrides.get(
+        CONF_PRESENCE_SENSORS
+    ):
         errors[CONF_PRESENCE_SENSORS] = "missing_presence_sensors"
     if overrides.get(CONF_OVERRIDE_SCHEDULE) and not overrides.get(CONF_SCHEDULE):
         errors[CONF_SCHEDULE] = "missing_schedule_entity"
@@ -76,33 +93,95 @@ def _validate_overrides(user_input: dict[str, Any], errors: dict[str, str]) -> N
         errors[CONF_WEATHER] = "missing_weather_entity"
 
 
-def _overrides_schema(defaults: dict[str, Any] | None = None) -> section:
-    """Build the overrides section schema with optional defaults."""
+def _overrides_schema(
+    defaults: dict[str, Any] | None = None,
+    global_data: dict[str, Any] | None = None,
+) -> section:
+    """Build the overrides section schema with optional defaults.
+
+    If defaults are not provided for entity fields, fall back to global_data
+    so that override entity selectors show the global value as placeholder.
+    """
     d = defaults or {}
-    return section(
-        vol.Schema({
-            vol.Required(CONF_OVERRIDE_PRESENCE, default=d.get(CONF_OVERRIDE_PRESENCE, False)): selector.BooleanSelector(),
-            vol.Optional(CONF_PRESENCE_SENSORS, default=d.get(CONF_PRESENCE_SENSORS, [])): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="person", multiple=True)
-            ),
-            vol.Required(CONF_OVERRIDE_SCHEDULE, default=d.get(CONF_OVERRIDE_SCHEDULE, False)): selector.BooleanSelector(),
-            vol.Optional(CONF_SCHEDULE, default=d.get(CONF_SCHEDULE)): selector.EntitySelector(
+    g = global_data or {}
+
+    # For entity fields: use room override first, then global, then empty
+    def _entity_default(key, fallback=None):
+        val = d.get(key) or g.get(key) or fallback
+        return val
+
+    sched_default = _entity_default(CONF_SCHEDULE)
+    weather_default = _entity_default(CONF_WEATHER)
+
+    schema_dict: dict = {
+        vol.Required(
+            CONF_OVERRIDE_PRESENCE,
+            default=d.get(CONF_OVERRIDE_PRESENCE, False),
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_PRESENCE_SENSORS,
+            default=_entity_default(CONF_PRESENCE_SENSORS, []),
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="person", multiple=True)
+        ),
+        vol.Required(
+            CONF_OVERRIDE_SCHEDULE,
+            default=d.get(CONF_OVERRIDE_SCHEDULE, False),
+        ): selector.BooleanSelector(),
+    }
+
+    # Only set default if we have a valid entity id (avoids None validation error)
+    if sched_default:
+        schema_dict[vol.Optional(CONF_SCHEDULE, default=sched_default)] = (
+            selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="schedule")
-            ),
-            vol.Required(CONF_OVERRIDE_WEATHER, default=d.get(CONF_OVERRIDE_WEATHER, False)): selector.BooleanSelector(),
-            vol.Optional(CONF_WEATHER, default=d.get(CONF_WEATHER)): selector.EntitySelector(
+            )
+        )
+    else:
+        schema_dict[vol.Optional(CONF_SCHEDULE)] = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="schedule")
+        )
+
+    schema_dict[vol.Required(
+        CONF_OVERRIDE_WEATHER,
+        default=d.get(CONF_OVERRIDE_WEATHER, False),
+    )] = selector.BooleanSelector()
+
+    if weather_default:
+        schema_dict[vol.Optional(CONF_WEATHER, default=weather_default)] = (
+            selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="weather")
-            ),
-            vol.Required(CONF_OVERRIDE_COMFORT, default=d.get(CONF_OVERRIDE_COMFORT, False)): selector.BooleanSelector(),
-            vol.Optional(CONF_COMFORT_TEMP, default=d.get(CONF_COMFORT_TEMP, 21.0)): _temp_selector(),
-            vol.Required(CONF_OVERRIDE_AWAY, default=d.get(CONF_OVERRIDE_AWAY, False)): selector.BooleanSelector(),
-            vol.Optional(CONF_AWAY_TEMP, default=d.get(CONF_AWAY_TEMP, 15.0)): _temp_selector(),
-        }),
-        {"collapsed": True},
-    )
+            )
+        )
+    else:
+        schema_dict[vol.Optional(CONF_WEATHER)] = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="weather")
+        )
+
+    schema_dict.update({
+        vol.Required(
+            CONF_OVERRIDE_COMFORT,
+            default=d.get(CONF_OVERRIDE_COMFORT, False),
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_COMFORT_TEMP,
+            default=d.get(CONF_COMFORT_TEMP) or g.get(CONF_COMFORT_TEMP, 21.0),
+        ): _temp_selector(),
+        vol.Required(
+            CONF_OVERRIDE_AWAY,
+            default=d.get(CONF_OVERRIDE_AWAY, False),
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_AWAY_TEMP,
+            default=d.get(CONF_AWAY_TEMP) or g.get(CONF_AWAY_TEMP, 15.0),
+        ): _temp_selector(),
+    })
+
+    return section(vol.Schema(schema_dict), {"collapsed": True})
 
 
 # --- Auto-discovery from area ---
+
 
 def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
     """Find heaters, temp sensors, and window sensors in an area."""
@@ -123,11 +202,19 @@ def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
             heaters.append(entry.entity_id)
 
         # Temperature sensor
-        if domain == "sensor" and entry.device_class == "temperature" and temp_sensor is None:
+        if (
+            domain == "sensor"
+            and entry.device_class == "temperature"
+            and temp_sensor is None
+        ):
             temp_sensor = entry.entity_id
 
         # Window sensor
-        if domain == "binary_sensor" and entry.device_class == "window" and window_sensor is None:
+        if (
+            domain == "binary_sensor"
+            and entry.device_class == "window"
+            and window_sensor is None
+        ):
             window_sensor = entry.entity_id
 
     return {
@@ -151,7 +238,21 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Handle the initial step."""
+        """Handle the initial step.
+
+        - If no global entry exists: show both options, default to Global
+        - If global already configured: skip straight to area (room) setup
+        """
+        global_entry = _get_global_entry(self.hass)
+
+        # If global already exists, skip the choice and go directly to room
+        if global_entry is not None:
+            if user_input is not None:
+                return await self.async_step_area()
+            # Skip user step entirely — go straight to area selection
+            return await self.async_step_area()
+
+        # No global yet — show both options with "Global" as default
         if user_input is not None:
             if user_input[CONF_ENTRY_TYPE] == ENTRY_TYPE_GLOBAL:
                 return await self.async_step_global()
@@ -159,17 +260,27 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_ENTRY_TYPE, default=ENTRY_TYPE_ROOM): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            selector.SelectOptionDict(value=ENTRY_TYPE_ROOM, label="Add a new Room"),
-                            selector.SelectOptionDict(value=ENTRY_TYPE_GLOBAL, label="Configure Global Defaults"),
-                        ],
-                        mode=selector.SelectSelectorMode.LIST,
-                    )
-                ),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ENTRY_TYPE, default=ENTRY_TYPE_GLOBAL
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(
+                                    value=ENTRY_TYPE_GLOBAL,
+                                    label="Configure Global Defaults",
+                                ),
+                                selector.SelectOptionDict(
+                                    value=ENTRY_TYPE_ROOM,
+                                    label="Add a new Room",
+                                ),
+                            ],
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
         )
 
     async def async_step_global(
@@ -183,31 +294,43 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="global",
-            data_schema=vol.Schema({
-                vol.Required(CONF_COMFORT_TEMP, default=21.0): _temp_selector(),
-                vol.Required(CONF_ECO_TEMP, default=18.0): _temp_selector(),
-                vol.Required(CONF_AWAY_TEMP, default=15.0): _temp_selector(),
-                vol.Required(CONF_AVG_SPEED, default=50.0): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=10, max=200, step=5,
-                        unit_of_measurement="km/h",
-                        mode=selector.NumberSelectorMode.SLIDER,
-                    )
-                ),
-                vol.Optional(CONF_PRESENCE_SENSORS): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="person", multiple=True)
-                ),
-                vol.Optional(CONF_SCHEDULE): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="schedule")
-                ),
-                vol.Optional(CONF_WEATHER): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="weather")
-                ),
-                vol.Optional(CONF_OVERRIDE_SWITCH): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["input_boolean", "switch"])
-                ),
-                vol.Optional(CONF_VACATION_STATE, default=False): selector.BooleanSelector(),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_COMFORT_TEMP, default=21.0): _temp_selector(),
+                    vol.Required(CONF_ECO_TEMP, default=18.0): _temp_selector(),
+                    vol.Required(CONF_AWAY_TEMP, default=15.0): _temp_selector(),
+                    vol.Required(
+                        CONF_AVG_SPEED, default=50.0
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=10,
+                            max=200,
+                            step=5,
+                            unit_of_measurement="km/h",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(CONF_PRESENCE_SENSORS): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="person", multiple=True
+                        )
+                    ),
+                    vol.Optional(CONF_SCHEDULE): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="schedule")
+                    ),
+                    vol.Optional(CONF_WEATHER): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="weather")
+                    ),
+                    vol.Optional(CONF_OVERRIDE_SWITCH): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["input_boolean", "switch"]
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_VACATION_STATE, default=False
+                    ): selector.BooleanSelector(),
+                }
+            ),
         )
 
     async def async_step_area(
@@ -222,14 +345,18 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 area = area_reg.async_get_area(self._area_id)
                 self._area_name = area.name if area else self._area_id
                 # Auto-discover entities
-                self._discovered = _discover_entities_for_area(self.hass, self._area_id)
+                self._discovered = _discover_entities_for_area(
+                    self.hass, self._area_id
+                )
             return await self.async_step_room()
 
         return self.async_show_form(
             step_id="area",
-            data_schema=vol.Schema({
-                vol.Optional(CONF_AREA): selector.AreaSelector(),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_AREA): selector.AreaSelector(),
+                }
+            ),
         )
 
     async def async_step_room(
@@ -244,51 +371,81 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 flat_data[CONF_ENTRY_TYPE] = ENTRY_TYPE_ROOM
                 if self._area_id:
                     flat_data[CONF_AREA] = self._area_id
-                return self.async_create_entry(title=flat_data[CONF_NAME], data=flat_data)
+                title = flat_data[CONF_NAME]
+                return self.async_create_entry(title=title, data=flat_data)
+
+        # Get global data for defaults in overrides
+        global_entry = _get_global_entry(self.hass)
+        global_data = dict(global_entry.data) if global_entry else {}
 
         # Use discovered defaults from area, or empty
         d = self._discovered
-        default_name = self._area_name or DEFAULT_NAME
+        default_name = (
+            f"Vesta {self._area_name}" if self._area_name else DEFAULT_NAME
+        )
         default_heaters = d.get(CONF_HEATER_ENTITIES, [])
         default_sensor = d.get(CONF_SENSOR)
         default_window = d.get(CONF_WINDOW_SENSOR)
 
-        schema = {
+        schema: dict = {
             vol.Required(CONF_NAME, default=default_name): str,
         }
 
         # Heaters: pre-populate with discovered, but always required
         if default_heaters:
-            schema[vol.Required(CONF_HEATER_ENTITIES, default=default_heaters)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["climate", "switch", "water_heater"], multiple=True)
+            schema[
+                vol.Required(CONF_HEATER_ENTITIES, default=default_heaters)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["climate", "switch", "water_heater"], multiple=True
+                )
             )
         else:
-            schema[vol.Required(CONF_HEATER_ENTITIES)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["climate", "switch", "water_heater"], multiple=True)
+            schema[vol.Required(CONF_HEATER_ENTITIES)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["climate", "switch", "water_heater"],
+                        multiple=True,
+                    )
+                )
             )
 
         # Temp sensor
         if default_sensor:
-            schema[vol.Required(CONF_SENSOR, default=default_sensor)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+            schema[
+                vol.Required(CONF_SENSOR, default=default_sensor)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor", device_class="temperature"
+                )
             )
         else:
             schema[vol.Required(CONF_SENSOR)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+                selector.EntitySelectorConfig(
+                    domain="sensor", device_class="temperature"
+                )
             )
 
-        # Window sensor
+        # Window sensor — no default=None to avoid validation error
         if default_window:
-            schema[vol.Optional(CONF_WINDOW_SENSOR, default=default_window)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
+            schema[
+                vol.Optional(CONF_WINDOW_SENSOR, default=default_window)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor", device_class="window"
+                )
             )
         else:
             schema[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor", device_class="window"
+                )
             )
 
-        # Overrides section
-        schema[vol.Required("overrides")] = _overrides_schema()
+        # Overrides section — pass global data so entity selectors show global defaults
+        schema[vol.Required("overrides")] = _overrides_schema(
+            global_data=global_data
+        )
 
         return self.async_show_form(
             step_id="room",
@@ -324,37 +481,111 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         """Update global settings."""
         if user_input is not None:
             new_data = {**self.config_entry.data, **user_input}
-            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, data=new_data
+            )
             return self.async_create_entry(title="", data={})
 
         current = self.config_entry.data
+
+        # Build schema — avoid default=None for entity selectors
+        schema_dict: dict = {
+            vol.Required(
+                CONF_COMFORT_TEMP,
+                default=current.get(CONF_COMFORT_TEMP, 21.0),
+            ): _temp_selector(),
+            vol.Required(
+                CONF_ECO_TEMP, default=current.get(CONF_ECO_TEMP, 18.0)
+            ): _temp_selector(),
+            vol.Required(
+                CONF_AWAY_TEMP, default=current.get(CONF_AWAY_TEMP, 15.0)
+            ): _temp_selector(),
+            vol.Required(
+                CONF_AVG_SPEED, default=current.get(CONF_AVG_SPEED, 50.0)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=10,
+                    max=200,
+                    step=5,
+                    unit_of_measurement="km/h",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+        }
+
+        # Entity selectors — only set default if we have a valid value
+        presence = current.get(CONF_PRESENCE_SENSORS)
+        if presence:
+            schema_dict[
+                vol.Optional(CONF_PRESENCE_SENSORS, default=presence)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="person", multiple=True)
+            )
+        else:
+            schema_dict[vol.Optional(CONF_PRESENCE_SENSORS)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="person", multiple=True
+                    )
+                )
+            )
+
+        schedule = current.get(CONF_SCHEDULE)
+        if schedule:
+            schema_dict[
+                vol.Optional(CONF_SCHEDULE, default=schedule)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="schedule")
+            )
+        else:
+            schema_dict[vol.Optional(CONF_SCHEDULE)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="schedule")
+                )
+            )
+
+        weather = current.get(CONF_WEATHER)
+        if weather:
+            schema_dict[
+                vol.Optional(CONF_WEATHER, default=weather)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="weather")
+            )
+        else:
+            schema_dict[vol.Optional(CONF_WEATHER)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="weather")
+                )
+            )
+
+        override_sw = current.get(CONF_OVERRIDE_SWITCH)
+        if override_sw:
+            schema_dict[
+                vol.Optional(CONF_OVERRIDE_SWITCH, default=override_sw)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["input_boolean", "switch"]
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_OVERRIDE_SWITCH)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["input_boolean", "switch"]
+                    )
+                )
+            )
+
+        schema_dict[
+            vol.Optional(
+                CONF_VACATION_STATE,
+                default=current.get(CONF_VACATION_STATE, False),
+            )
+        ] = selector.BooleanSelector()
+
         return self.async_show_form(
             step_id="global",
-            data_schema=vol.Schema({
-                vol.Required(CONF_COMFORT_TEMP, default=current.get(CONF_COMFORT_TEMP, 21.0)): _temp_selector(),
-                vol.Required(CONF_ECO_TEMP, default=current.get(CONF_ECO_TEMP, 18.0)): _temp_selector(),
-                vol.Required(CONF_AWAY_TEMP, default=current.get(CONF_AWAY_TEMP, 15.0)): _temp_selector(),
-                vol.Required(CONF_AVG_SPEED, default=current.get(CONF_AVG_SPEED, 50.0)): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=10, max=200, step=5,
-                        unit_of_measurement="km/h",
-                        mode=selector.NumberSelectorMode.SLIDER,
-                    )
-                ),
-                vol.Optional(CONF_PRESENCE_SENSORS, default=current.get(CONF_PRESENCE_SENSORS, [])): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="person", multiple=True)
-                ),
-                vol.Optional(CONF_SCHEDULE, default=current.get(CONF_SCHEDULE)): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="schedule")
-                ),
-                vol.Optional(CONF_WEATHER, default=current.get(CONF_WEATHER)): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="weather")
-                ),
-                vol.Optional(CONF_OVERRIDE_SWITCH, default=current.get(CONF_OVERRIDE_SWITCH)): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["input_boolean", "switch"])
-                ),
-                vol.Optional(CONF_VACATION_STATE, default=current.get(CONF_VACATION_STATE, False)): selector.BooleanSelector(),
-            }),
+            data_schema=vol.Schema(schema_dict),
         )
 
     async def async_step_room(
@@ -367,24 +598,73 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             if not errors:
                 flat_data = _flatten_overrides(user_input)
                 new_data = {**self.config_entry.data, **flat_data}
-                self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, data=new_data
+                )
                 return self.async_create_entry(title="", data={})
 
         current = self.config_entry.data
+
+        # Get global data for override defaults
+        global_entry = _get_global_entry(self.hass)
+        global_data = dict(global_entry.data) if global_entry else {}
+
+        # Build schema — avoid default=None for entity selectors
+        schema_dict: dict = {
+            vol.Required(
+                CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)
+            ): str,
+            vol.Required(
+                CONF_HEATER_ENTITIES,
+                default=current.get(CONF_HEATER_ENTITIES, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["climate", "switch", "water_heater"], multiple=True
+                )
+            ),
+        }
+
+        sensor = current.get(CONF_SENSOR)
+        if sensor:
+            schema_dict[
+                vol.Required(CONF_SENSOR, default=sensor)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor", device_class="temperature"
+                )
+            )
+        else:
+            schema_dict[vol.Required(CONF_SENSOR)] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor", device_class="temperature"
+                )
+            )
+
+        window = current.get(CONF_WINDOW_SENSOR)
+        if window:
+            schema_dict[
+                vol.Optional(CONF_WINDOW_SENSOR, default=window)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor", device_class="window"
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_WINDOW_SENSOR)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor", device_class="window"
+                    )
+                )
+            )
+
+        # Pass both room-level overrides and global data as fallback
+        schema_dict[vol.Required("overrides")] = _overrides_schema(
+            defaults=dict(current), global_data=global_data
+        )
+
         return self.async_show_form(
             step_id="room",
-            data_schema=vol.Schema({
-                vol.Required(CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)): str,
-                vol.Required(CONF_HEATER_ENTITIES, default=current.get(CONF_HEATER_ENTITIES, [])): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["climate", "switch", "water_heater"], multiple=True)
-                ),
-                vol.Required(CONF_SENSOR, default=current.get(CONF_SENSOR)): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
-                ),
-                vol.Optional(CONF_WINDOW_SENSOR, default=current.get(CONF_WINDOW_SENSOR)): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
-                ),
-                vol.Required("overrides"): _overrides_schema(defaults=dict(current)),
-            }),
+            data_schema=vol.Schema(schema_dict),
             errors=errors,
         )
