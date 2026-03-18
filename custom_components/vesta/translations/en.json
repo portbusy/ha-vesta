@@ -26,6 +26,12 @@
       "room": {
         "title": "Room Configuration",
         "description": "Configure radiators and sensors for a specific room.",
+        "sections": {
+          "overrides": {
+            "title": "Custom Overrides (Optional)",
+            "description": "Enable these toggles ONLY if you want this room to behave differently from the Global Home Settings."
+          }
+        },
         "data": {
           "name": "Room Name",
           "heaters": "Heater Entities (TRVs, Switches, etc.)",
@@ -68,6 +74,12 @@
       },
       "room": {
         "title": "Update Room Settings",
+        "sections": {
+          "overrides": {
+            "title": "Custom Overrides (Optional)",
+            "description": "Enable these toggles ONLY if you want this room to behave differently from the Global Home Settings."
+          }
+        },
         "data": {
           "name": "Room Name",
           "heaters": "Heater Entities (TRVs, Switches, etc.)",

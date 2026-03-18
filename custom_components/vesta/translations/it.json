@@ -26,6 +26,12 @@
       "room": {
         "title": "Configurazione Stanza",
         "description": "Configura i radiatori e i sensori per una stanza specifica.",
+        "sections": {
+          "overrides": {
+            "title": "Personalizzazioni Stanza (Opzionale)",
+            "description": "Attiva questi toggle SOLO se vuoi che questa stanza si comporti diversamente dalle impostazioni globali della casa."
+          }
+        },
         "data": {
           "name": "Nome della stanza",
           "heaters": "Entità di riscaldamento (TRV, interruttori, ecc.)",
@@ -68,6 +74,12 @@
       },
       "room": {
         "title": "Aggiorna Impostazioni Stanza",
+        "sections": {
+          "overrides": {
+            "title": "Personalizzazioni Stanza (Opzionale)",
+            "description": "Attiva questi toggle SOLO se vuoi che questa stanza si comporti diversamente dalle impostazioni globali della casa."
+          }
+        },
         "data": {
           "name": "Nome della stanza",
           "heaters": "Entità di riscaldamento (TRV, interruttori, ecc.)",

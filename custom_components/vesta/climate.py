@@ -265,10 +265,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._vacation_active = (vacation_status == "on")
 
         # 2. Schedule Logic
-        sched_id = self._data.get(CONF_SCHEDULE) if self._data.get(CONF_OVERRIDE_SCHEDULE) else g.data.get(CONF_SCHEDULE)
-        if sched_id and (s_state := self.hass.states.get(sched_id)):
-            # If schedule is ON, target is comfort, else eco
-            self._target_temp = self.comfort_temp if s_state.state == STATE_ON else self.eco_temp
+        if self._preset_mode != MODE_MANUAL:
+            sched_id = self._data.get(CONF_SCHEDULE) if self._data.get(CONF_OVERRIDE_SCHEDULE) else g.data.get(CONF_SCHEDULE)
+            if sched_id and (s_state := self.hass.states.get(sched_id)):
+                # If schedule is ON, target is comfort, else eco
+                self._target_temp = self.comfort_temp if s_state.state == STATE_ON else self.eco_temp
 
         # 3. Presence & Geofencing
         presence_ids = self._data.get(CONF_PRESENCE_SENSORS) if self._data.get(CONF_OVERRIDE_PRESENCE) else g.data.get(CONF_PRESENCE_SENSORS)
@@ -375,6 +376,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @property
     def name(self) -> str: return self._name
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID."""
+        return f"{DOMAIN}_{self._name.lower().replace(' ', '_')}_{self._sensor_id}"
+
     @property
     def temperature_unit(self) -> str: return UnitOfTemperature.CELSIUS
     @property

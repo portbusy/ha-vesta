@@ -133,6 +133,14 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_WINDOW_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
                 ),
+                
+                # Overrides
+                vol.Optional("overrides"): selector.SectionSelector(
+                    selector.SectionSelectorConfig(
+                        collapsible=True,
+                        collapsed=True,
+                    )
+                ),
                 vol.Required(CONF_OVERRIDE_PRESENCE, default=False): selector.BooleanSelector(),
                 vol.Optional(CONF_PRESENCE_SENSORS): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="person", multiple=True)
@@ -238,6 +246,14 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 ),
                 vol.Optional(CONF_WINDOW_SENSOR, default=current.get(CONF_WINDOW_SENSOR)): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
+                ),
+                
+                # Overrides
+                vol.Optional("overrides"): selector.SectionSelector(
+                    selector.SectionSelectorConfig(
+                        collapsible=True,
+                        collapsed=True,
+                    )
                 ),
                 vol.Required(CONF_OVERRIDE_PRESENCE, default=current.get(CONF_OVERRIDE_PRESENCE, False)): selector.BooleanSelector(),
                 vol.Optional(CONF_PRESENCE_SENSORS, default=current.get(CONF_PRESENCE_SENSORS, [])): selector.EntitySelector(
