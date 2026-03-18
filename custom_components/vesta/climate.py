@@ -261,11 +261,27 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         if self not in self.hass.data[DOMAIN]["rooms"]: self.hass.data[DOMAIN]["rooms"].append(self)
+        
         old = await self.async_get_last_state()
         if old:
             self._heating_rate = old.attributes.get(ATTR_HEATING_RATE, self._heating_rate)
             self._cooling_rate = old.attributes.get(ATTR_COOLING_RATE, self._cooling_rate)
             self._daily_usage_seconds = old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
+            # Restore last known temperature to bridge the gap during restart
+            if old.state not in ("unknown", "unavailable") and self._cur_temp is None:
+                try:
+                    self._cur_temp = float(old.attributes.get("current_temperature") or old.state)
+                except (ValueError, TypeError):
+                    pass
+
+        # Try to get current sensor state immediately
+        if self._sensor_id and (state := self.hass.states.get(self._sensor_id)):
+            if state.state not in ("unknown", "unavailable"):
+                try:
+                    self._cur_temp = float(state.state)
+                except ValueError:
+                    pass
+
         self.async_on_remove(async_track_time_interval(self.hass, self._async_tick, timedelta(minutes=1)))
         self._setup_listeners()
 
