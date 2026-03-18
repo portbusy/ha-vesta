@@ -10,6 +10,7 @@ CONF_WEATHER = "weather_entity"
 CONF_OVERRIDE_SWITCH = "override_switch"
 CONF_VACATION_STATE = "vacation_state"
 CONF_NAME = "name"
+CONF_AREA = "area"
 
 # Config Type
 CONF_ENTRY_TYPE = "entry_type"
@@ -37,6 +38,7 @@ ATTR_HEATING_POWER = "heating_power"
 ATTR_DAILY_USAGE = "daily_usage_minutes"
 ATTR_NEAREST_DISTANCE = "nearest_distance"
 ATTR_VACATION_MODE = "vacation_mode_active"
+ATTR_OUTDOOR_TEMP = "outdoor_temperature"
 
 DEFAULT_NAME = "Smart Climate Control"
 
