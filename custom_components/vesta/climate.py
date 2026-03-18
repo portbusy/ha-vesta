@@ -285,6 +285,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self.async_on_remove(async_track_time_interval(self.hass, self._async_tick, timedelta(minutes=1)))
         self._setup_listeners()
 
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity will be removed from hass."""
+        if self in self.hass.data[DOMAIN]["rooms"]:
+            self.hass.data[DOMAIN]["rooms"].remove(self)
+        await super().async_will_remove_from_hass()
+
     def _setup_listeners(self):
         for listener in self._event_listeners: listener()
         self._event_listeners = []

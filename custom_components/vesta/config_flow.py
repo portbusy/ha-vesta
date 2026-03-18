@@ -1,6 +1,7 @@
 """Config flow for Global and Room-based Climate Pro (Presence/Weather)."""
 from __future__ import annotations
 
+from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -40,7 +41,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         """Initialize options flow."""
         self.config_entry = config_entry
 
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> Any:
         """Manage the options."""
         entry_type = self.config_entry.data.get(CONF_ENTRY_TYPE)
 
@@ -48,10 +49,9 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_global(user_input)
         return await self.async_step_room(user_input)
 
-    async def async_step_global(self, user_input=None):
+    async def async_step_global(self, user_input: dict[str, Any] | None = None) -> Any:
         """Update global home settings."""
         if user_input is not None:
-            # Update original data since we use .data in the component
             new_data = {**self.config_entry.data, **user_input}
             self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
             return self.async_create_entry(title="", data={})
@@ -77,12 +77,15 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     selector.EntitySelectorConfig(domain=["input_boolean", "switch"])
                 ),
                 vol.Optional(CONF_VACATION_STATE, default=current.get(CONF_VACATION_STATE, "on")): selector.SelectSelector(
-                    selector.SelectSelectorConfig(options=["on", "off"])
+                    selector.SelectSelectorConfig(options=[
+                        selector.SelectOptionDict(value="on", label="On"),
+                        selector.SelectOptionDict(value="off", label="Off")
+                    ])
                 ),
             }),
         )
 
-    async def async_step_room(self, user_input=None):
+    async def async_step_room(self, user_input: dict[str, Any] | None = None) -> Any:
         """Update room settings."""
         if user_input is not None:
             new_data = {**self.config_entry.data, **user_input}
@@ -104,25 +107,21 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
                 ),
                 
-                # Presence Override
                 vol.Required(CONF_OVERRIDE_PRESENCE, default=current.get(CONF_OVERRIDE_PRESENCE, False)): bool,
                 vol.Optional(CONF_PRESENCE_SENSORS, default=current.get(CONF_PRESENCE_SENSORS, [])): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="person", multiple=True)
                 ),
 
-                # Schedule Override
                 vol.Required(CONF_OVERRIDE_SCHEDULE, default=current.get(CONF_OVERRIDE_SCHEDULE, False)): bool,
                 vol.Optional(CONF_SCHEDULE, default=current.get(CONF_SCHEDULE)): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="schedule")
                 ),
 
-                # Weather Override
                 vol.Required(CONF_OVERRIDE_WEATHER, default=current.get(CONF_OVERRIDE_WEATHER, False)): bool,
                 vol.Optional(CONF_WEATHER, default=current.get(CONF_WEATHER)): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="weather")
                 ),
 
-                # Temp Override
                 vol.Required(CONF_OVERRIDE_COMFORT, default=current.get(CONF_OVERRIDE_COMFORT, False)): bool,
                 vol.Optional(CONF_COMFORT_TEMP, default=current.get(CONF_COMFORT_TEMP, 21.0)): vol.Coerce(float),
                 
@@ -137,13 +136,12 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 6
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> Any:
         """First step: choose between adding a room or setting global defaults."""
-        options = ["room", "global"]
-        return self.async_show_menu(step_id="user", menu_options=options)
+        return self.async_show_menu(step_id="user", menu_options=["room", "global"])
 
-    async def async_step_global(self, user_input=None):
-        """Setup/Update global home settings."""
+    async def async_step_global(self, user_input: dict[str, Any] | None = None) -> Any:
+        """Setup global home settings."""
         if user_input is not None:
             user_input[CONF_ENTRY_TYPE] = ENTRY_TYPE_GLOBAL
             user_input[CONF_NAME] = "Global Home Settings"
@@ -169,12 +167,15 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     selector.EntitySelectorConfig(domain=["input_boolean", "switch"])
                 ),
                 vol.Optional(CONF_VACATION_STATE, default="on"): selector.SelectSelector(
-                    selector.SelectSelectorConfig(options=["on", "off"])
+                    selector.SelectSelectorConfig(options=[
+                        selector.SelectOptionDict(value="on", label="On"),
+                        selector.SelectOptionDict(value="off", label="Off")
+                    ])
                 ),
             }),
         )
 
-    async def async_step_room(self, user_input=None):
+    async def async_step_room(self, user_input: dict[str, Any] | None = None) -> Any:
         """Setup a specific room."""
         if user_input is not None:
             user_input[CONF_ENTRY_TYPE] = ENTRY_TYPE_ROOM
@@ -194,25 +195,21 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     selector.EntitySelectorConfig(domain="binary_sensor", device_class="window")
                 ),
                 
-                # Presence Override
                 vol.Required(CONF_OVERRIDE_PRESENCE, default=False): bool,
                 vol.Optional(CONF_PRESENCE_SENSORS): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="person", multiple=True)
                 ),
 
-                # Schedule Override
                 vol.Required(CONF_OVERRIDE_SCHEDULE, default=False): bool,
                 vol.Optional(CONF_SCHEDULE): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="schedule")
                 ),
 
-                # Weather Override
                 vol.Required(CONF_OVERRIDE_WEATHER, default=False): bool,
                 vol.Optional(CONF_WEATHER): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="weather")
                 ),
 
-                # Temp Override
                 vol.Required(CONF_OVERRIDE_COMFORT, default=False): bool,
                 vol.Optional(CONF_COMFORT_TEMP, default=21.0): vol.Coerce(float),
                 

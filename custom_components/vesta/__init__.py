@@ -17,7 +17,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN]["global"] = entry
         # Notify rooms to update their state if global settings changed
         for room in hass.data[DOMAIN]["rooms"]:
-            room.async_write_ha_state()
+            if hasattr(room, "async_write_ha_state"):
+                room.async_write_ha_state()
         return True
 
     # If this is a room entry
