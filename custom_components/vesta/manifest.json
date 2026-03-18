@@ -1,7 +1,7 @@
 {
   "domain": "vesta",
   "name": "Vesta (Tado-like)",
-  "codeowners": ["@davidebertolotti"],
+  "codeowners": ["@portbusy"],
   "config_flow": true,
   "documentation": "https://github.com/portbusy/ha-vesta",
   "iot_class": "local_polling",

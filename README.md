@@ -3,7 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 [![GitHub Release](https://img.shields.io/github/v/release/portbusy/ha-vesta?style=for-the-badge)](https://github.com/portbusy/ha-vesta/releases)
 [![License](https://img.shields.io/github/license/portbusy/ha-vesta?style=for-the-badge)](LICENSE)
-![Maintainer](https://img.shields.io/badge/maintainer-%40davidebertolotti-blue?style=for-the-badge)
+![Maintainer](https://img.shields.io/badge/maintainer-%40portbusy-blue?style=for-the-badge)
 
 **Vesta** is an advanced, predictive, and learning climate controller for Home Assistant, designed to replicate and improve upon the **Tado** experience.
 
@@ -48,4 +48,4 @@ Vesta uses a sophisticated decision engine that combines:
 - **Geofencing Hysteresis**: Prevents rapid switching near the home boundary.
 
 ---
-Developed with ❤️ by [@davidebertolotti](https://github.com/davidebertolotti)
+Developed with ❤️ by [@portbusy](https://github.com/portbusy)
