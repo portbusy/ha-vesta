@@ -176,6 +176,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
+            "preset_mode": self._preset_mode,
+            "target_temp": self._target_temp,
+            "manual_start_time": self._manual_start_time,
         }
 
     def _get_manual_timeout(self) -> int:
@@ -491,6 +494,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         old = await self.async_get_last_state()
         if old:
+            # Restore learned rates
             self._heating_rate = old.attributes.get(
                 ATTR_HEATING_RATE, self._heating_rate
             )
@@ -500,6 +504,36 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._daily_usage_seconds = (
                 old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
             )
+
+            # Restore HVAC mode
+            if old.state in (HVACMode.HEAT, HVACMode.OFF):
+                self._hvac_mode = HVACMode(old.state)
+
+            # Restore preset mode
+            restored_preset = old.attributes.get("preset_mode")
+            if restored_preset in self._attr_preset_modes:
+                self._preset_mode = restored_preset
+
+            # Restore target temperature
+            restored_target = old.attributes.get("target_temp")
+            if restored_target is not None:
+                try:
+                    self._target_temp = float(restored_target)
+                except (ValueError, TypeError):
+                    pass
+
+            # Restore manual start time (for timeout continuity)
+            restored_manual_time = old.attributes.get("manual_start_time")
+            if (
+                restored_manual_time is not None
+                and self._preset_mode == MODE_MANUAL
+            ):
+                try:
+                    self._manual_start_time = float(restored_manual_time)
+                except (ValueError, TypeError):
+                    pass
+
+            # Restore current temperature
             if (
                 old.state not in ("unknown", "unavailable")
                 and self._cur_temp is None

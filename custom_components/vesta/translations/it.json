@@ -1,4 +1,20 @@
 {
+  "entity": {
+    "climate": {
+      "smart_climate_pro": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "smart_schedule": "Programmazione Intelligente",
+              "manual": "Override Manuale",
+              "away": "Fuori Casa",
+              "vacation": "Modalità Vacanza"
+            }
+          }
+        }
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -10,50 +26,82 @@
       },
       "global": {
         "title": "Impostazioni Globali Casa",
-        "description": "Queste impostazioni si applicano a tutte le stanze a meno che non vengano sovrascritte.",
+        "description": "Queste impostazioni si applicano a tutte le stanze, a meno che non vengano sovrascritte singolarmente.",
         "data": {
-          "comfort_temp": "Temperatura Comfort predefinita",
-          "eco_temp": "Temperatura Eco predefinita",
-          "away_temp": "Temperatura Away predefinita",
-          "avg_travel_speed": "Velocità media di viaggio",
-          "presence_sensors": "Sensori di presenza globali",
-          "schedule_entity": "Programmazione globale",
-          "weather_entity": "Fornitore meteo",
-          "override_switch": "Interruttore di override manuale",
-          "vacation_state": "Modalità vacanza"
+          "comfort_temp": "Temperatura Comfort",
+          "eco_temp": "Temperatura Eco",
+          "away_temp": "Temperatura Fuori Casa",
+          "avg_travel_speed": "Velocità Media di Viaggio",
+          "presence_sensors": "Sensori di Presenza",
+          "schedule_entity": "Programmazione Riscaldamento",
+          "weather_entity": "Fornitore Meteo",
+          "override_switch": "Interruttore Override Manuale",
+          "vacation_state": "Modalità Vacanza"
+        },
+        "data_description": {
+          "comfort_temp": "Temperatura target quando qualcuno è a casa e la programmazione è attiva.",
+          "eco_temp": "Temperatura target durante i periodi inattivi della programmazione (es. di notte).",
+          "away_temp": "Temperatura target quando tutti sono fuori casa.",
+          "avg_travel_speed": "Usata per stimare il tempo di arrivo per il pre-riscaldamento intelligente. Imposta la velocità tipica del tuo tragitto.",
+          "presence_sensors": "Entità persona usate per rilevare se qualcuno è a casa. Gestisce automaticamente la modalità casa/fuori.",
+          "schedule_entity": "Un helper Programmazione che controlla quando applicare la temperatura comfort o eco. ON = comfort, OFF = eco.",
+          "weather_entity": "Usato per la compensazione meteo: aumenta il riscaldamento quando fa molto freddo fuori.",
+          "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo.",
+          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C)."
         }
       },
       "area": {
-        "title": "Seleziona Stanza",
-        "description": "Seleziona un'area di Home Assistant per scoprire automaticamente riscaldatori e sensori. Puoi saltare questo passaggio per configurare manualmente.",
+        "title": "Seleziona Area della Stanza",
+        "description": "Seleziona un'area di Home Assistant per scoprire automaticamente riscaldatori e sensori. Salta questo passaggio per configurare manualmente.",
         "data": {
-          "area": "Area della stanza"
+          "area": "Area della Stanza"
+        },
+        "data_description": {
+          "area": "Le entità assegnate a quest'area verranno rilevate e pre-selezionate automaticamente."
         }
       },
       "room": {
         "title": "Configurazione Stanza",
-        "description": "Configura i radiatori e i sensori per questa stanza. I campi sono precompilati dall'area selezionata.",
+        "description": "Configura i riscaldatori e i sensori per questa stanza.",
         "data": {
-          "name": "Nome della stanza",
-          "heaters": "Entità di riscaldamento (TRV, interruttori, ecc.)",
-          "target_sensor": "Sensore di temperatura",
-          "window_sensor": "Sensore finestra/porta (Opzionale)"
+          "name": "Nome Stanza",
+          "heaters": "Entità Riscaldamento",
+          "target_sensor": "Sensore di Temperatura",
+          "window_sensor": "Sensore Finestra/Porta"
+        },
+        "data_description": {
+          "name": "Nome visualizzato per questa entità clima (es. 'Vesta Soggiorno').",
+          "heaters": "Seleziona le TRV, gli switch o le entità clima che controllano il riscaldamento in questa stanza.",
+          "target_sensor": "Il sensore di temperatura usato per misurare la temperatura attuale della stanza.",
+          "window_sensor": "Quando questo sensore rileva una finestra aperta, il riscaldamento viene messo in pausa per risparmiare energia."
         },
         "sections": {
           "overrides": {
-            "name": "Personalizzazioni Stanza (Opzionale)",
-            "description": "Attiva questi toggle SOLO se vuoi che questa stanza si comporti diversamente dalle impostazioni globali della casa.",
+            "name": "Override Specifici della Stanza",
+            "description": "Attiva un toggle solo se questa stanza deve usare impostazioni diverse da quelle globali.",
             "data": {
-              "override_presence": "Sovrascrivi presenza globale",
-              "presence_sensors": "Sensori di presenza della stanza",
-              "override_schedule": "Sovrascrivi programmazione globale",
-              "schedule_entity": "Programmazione della stanza",
-              "override_weather": "Sovrascrivi meteo globale",
-              "weather_entity": "Fornitore meteo della stanza",
-              "override_comfort": "Sovrascrivi temp. comfort globale",
-              "comfort_temp": "Temperatura Comfort della stanza",
-              "override_away": "Sovrascrivi temp. away globale",
-              "away_temp": "Temperatura Away della stanza"
+              "override_presence": "Usa sensori di presenza personalizzati",
+              "presence_sensors": "Sensori di Presenza della Stanza",
+              "override_schedule": "Usa programmazione personalizzata",
+              "schedule_entity": "Programmazione della Stanza",
+              "override_weather": "Usa fonte meteo personalizzata",
+              "weather_entity": "Fornitore Meteo della Stanza",
+              "override_comfort": "Usa temperatura comfort personalizzata",
+              "comfort_temp": "Temperatura Comfort della Stanza",
+              "override_away": "Usa temperatura fuori casa personalizzata",
+              "away_temp": "Temperatura Fuori Casa della Stanza"
+            },
+            "data_description": {
+              "override_presence": "Quando attivo, questa stanza usa i propri sensori di presenza invece di quelli globali.",
+              "presence_sensors": "Entità persona che determinano se qualcuno è in questa stanza o nelle vicinanze.",
+              "override_schedule": "Quando attivo, questa stanza segue la propria programmazione di riscaldamento.",
+              "schedule_entity": "Un helper Programmazione specifico per questa stanza. ON = comfort, OFF = eco.",
+              "override_weather": "Quando attivo, questa stanza usa una fonte meteo diversa per la compensazione.",
+              "weather_entity": "Entità meteo usata per la compensazione della temperatura esterna in questa stanza.",
+              "override_comfort": "Quando attivo, questa stanza usa la propria temperatura comfort invece del valore globale.",
+              "comfort_temp": "Temperatura target quando la programmazione di questa stanza è attiva e qualcuno è a casa.",
+              "override_away": "Quando attivo, questa stanza usa la propria temperatura fuori casa invece del valore globale.",
+              "away_temp": "Temperatura target per questa stanza quando tutti sono fuori."
             }
           }
         }
@@ -70,40 +118,69 @@
       "global": {
         "title": "Aggiorna Impostazioni Casa",
         "data": {
-          "comfort_temp": "Temperatura Comfort predefinita",
-          "eco_temp": "Temperatura Eco predefinita",
-          "away_temp": "Temperatura Away predefinita",
-          "avg_travel_speed": "Velocità media di viaggio",
-          "presence_sensors": "Sensori di presenza globali",
-          "schedule_entity": "Programmazione globale",
-          "weather_entity": "Fornitore meteo",
-          "override_switch": "Interruttore di override manuale",
-          "vacation_state": "Modalità vacanza"
+          "comfort_temp": "Temperatura Comfort",
+          "eco_temp": "Temperatura Eco",
+          "away_temp": "Temperatura Fuori Casa",
+          "avg_travel_speed": "Velocità Media di Viaggio",
+          "presence_sensors": "Sensori di Presenza",
+          "schedule_entity": "Programmazione Riscaldamento",
+          "weather_entity": "Fornitore Meteo",
+          "override_switch": "Interruttore Override Manuale",
+          "vacation_state": "Modalità Vacanza"
+        },
+        "data_description": {
+          "comfort_temp": "Temperatura target quando qualcuno è a casa e la programmazione è attiva.",
+          "eco_temp": "Temperatura target durante i periodi inattivi della programmazione (es. di notte).",
+          "away_temp": "Temperatura target quando tutti sono fuori casa.",
+          "avg_travel_speed": "Usata per stimare il tempo di arrivo per il pre-riscaldamento intelligente.",
+          "presence_sensors": "Entità persona usate per rilevare se qualcuno è a casa.",
+          "schedule_entity": "Helper Programmazione: ON = comfort, OFF = eco.",
+          "weather_entity": "Usato per la compensazione meteo quando fa molto freddo fuori.",
+          "override_switch": "Un input_boolean o switch che forza tutti i riscaldatori al massimo quando attivo.",
+          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C)."
         }
       },
       "room": {
         "title": "Aggiorna Impostazioni Stanza",
         "data": {
-          "name": "Nome della stanza",
-          "heaters": "Entità di riscaldamento (TRV, interruttori, ecc.)",
-          "target_sensor": "Sensore di temperatura",
-          "window_sensor": "Sensore finestra/porta (Opzionale)"
+          "name": "Nome Stanza",
+          "heaters": "Entità Riscaldamento",
+          "target_sensor": "Sensore di Temperatura",
+          "window_sensor": "Sensore Finestra/Porta"
+        },
+        "data_description": {
+          "name": "Nome visualizzato per questa entità clima.",
+          "heaters": "TRV, switch o entità clima che controllano il riscaldamento di questa stanza.",
+          "target_sensor": "Sensore di temperatura per misurare la temperatura attuale della stanza.",
+          "window_sensor": "Il riscaldamento si mette in pausa quando questo sensore rileva una finestra aperta."
         },
         "sections": {
           "overrides": {
-            "name": "Personalizzazioni Stanza (Opzionale)",
-            "description": "Attiva questi toggle SOLO se vuoi che questa stanza si comporti diversamente dalle impostazioni globali della casa.",
+            "name": "Override Specifici della Stanza",
+            "description": "Attiva un toggle solo se questa stanza deve usare impostazioni diverse da quelle globali.",
             "data": {
-              "override_presence": "Sovrascrivi presenza globale",
-              "presence_sensors": "Sensori di presenza della stanza",
-              "override_schedule": "Sovrascrivi programmazione globale",
-              "schedule_entity": "Programmazione della stanza",
-              "override_weather": "Sovrascrivi meteo globale",
-              "weather_entity": "Fornitore meteo della stanza",
-              "override_comfort": "Sovrascrivi temp. comfort globale",
-              "comfort_temp": "Temperatura Comfort della stanza",
-              "override_away": "Sovrascrivi temp. away globale",
-              "away_temp": "Temperatura Away della stanza"
+              "override_presence": "Usa sensori di presenza personalizzati",
+              "presence_sensors": "Sensori di Presenza della Stanza",
+              "override_schedule": "Usa programmazione personalizzata",
+              "schedule_entity": "Programmazione della Stanza",
+              "override_weather": "Usa fonte meteo personalizzata",
+              "weather_entity": "Fornitore Meteo della Stanza",
+              "override_comfort": "Usa temperatura comfort personalizzata",
+              "comfort_temp": "Temperatura Comfort della Stanza",
+              "override_away": "Usa temperatura fuori casa personalizzata",
+              "away_temp": "Temperatura Fuori Casa della Stanza"
+            },
+            "data_description": {
+              "override_presence": "Usa sensori di presenza specifici per questa stanza.",
+              "presence_sensors": "Entità persona per il rilevamento presenza di questa stanza.",
+              "override_schedule": "Segui una programmazione di riscaldamento specifica per questa stanza.",
+              "schedule_entity": "Helper Programmazione per questa stanza. ON = comfort, OFF = eco.",
+              "override_weather": "Usa una fonte meteo diversa per questa stanza.",
+              "weather_entity": "Entità meteo per la compensazione della temperatura esterna.",
+              "override_comfort": "Usa una temperatura comfort personalizzata per questa stanza.",
+              "comfort_temp": "Temperatura comfort quando la programmazione è attiva.",
+              "override_away": "Usa una temperatura fuori casa personalizzata per questa stanza.",
+              "away_temp": "Temperatura fuori casa quando nessuno è in casa."
             }
           }
         }
