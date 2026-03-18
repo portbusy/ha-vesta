@@ -11,6 +11,8 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     CONF_NAME,
@@ -42,6 +44,12 @@ from .const import (
     CONF_ECO_TEMP,
     CONF_AWAY_TEMP,
     CONF_AVG_SPEED,
+    CONF_OVERRIDE_COMFORT,
+    CONF_OVERRIDE_AWAY,
+    CONF_OVERRIDE_SPEED,
+    CONF_OVERRIDE_PRESENCE,
+    CONF_OVERRIDE_WEATHER,
+    CONF_OVERRIDE_SCHEDULE,
     MODE_SMART_SCHEDULE,
     MODE_MANUAL,
     MODE_AWAY,
@@ -61,6 +69,16 @@ ANTI_FROST_TEMP = 5.0
 MANUAL_OVERRIDE_TIMEOUT_HRS = 4
 MAX_HEATING_RATE = 0.5  # °C/min max (safety clamp)
 MIN_HEATING_RATE = 0.005 # °C/min min (safety clamp)
+LEARNING_ALPHA = 0.05
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Vesta climate platform."""
+    data = entry.data
+    async_add_entities([SmartClimatePro(hass, data)])
 
 class SmartClimatePro(ClimateEntity, RestoreEntity):
     """The Ultimate Room Controller with Hardware Failure Detection & Frost Guard."""
@@ -84,6 +102,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._heating_power = 0.0
         self._heating_rate, self._cooling_rate = 0.05, 0.02
         self._daily_usage_seconds = 0
+        self._last_learning_temp = None
+        self._last_learning_time = None
         
         # Safety & Fail-safe state
         self._last_heater_state = None
@@ -200,6 +220,25 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     # Standard HA Boilerplate & Dynamic Properties
     @property
+    def comfort_temp(self) -> float:
+        """Return the target comfort temperature."""
+        if self._data.get(CONF_OVERRIDE_COMFORT):
+            return float(self._data.get(CONF_COMFORT_TEMP, 21.0))
+        return float(self._get_global(CONF_COMFORT_TEMP, 21.0))
+
+    @property
+    def eco_temp(self) -> float:
+        """Return the eco temperature."""
+        return float(self._get_global(CONF_ECO_TEMP, 18.0))
+
+    @property
+    def away_temp(self) -> float:
+        """Return the away temperature."""
+        if self._data.get(CONF_OVERRIDE_AWAY):
+            return float(self._data.get(CONF_AWAY_TEMP, 15.0))
+        return float(self._get_global(CONF_AWAY_TEMP, 15.0))
+
+    @property
     def target_temperature(self) -> float:
         if self._vacation_active: return ANTI_FROST_TEMP
         if self._force_return: return self.comfort_temp
@@ -212,7 +251,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if self._preset_mode == MODE_AWAY and self._cur_temp:
             if (self._nearest_distance / 1000) / (self._get_global(CONF_AVG_SPEED, 50.0) / 60) <= (base - self._cur_temp) / self._heating_rate:
                 return base
-            return self._get_global(CONF_AWAY_TEMP, 15.0) if self._nearest_distance > 15000 else self._get_global(CONF_ECO_TEMP, 18.0)
+            return self.away_temp if self._nearest_distance > 15000 else self.eco_temp
         return base
 
     async def _update_state(self):
