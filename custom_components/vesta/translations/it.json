@@ -43,6 +43,11 @@
           "away_temp": "Temperatura Away della stanza (°C)"
         }
       }
+    },
+    "error": {
+      "missing_presence_sensors": "Devi selezionare almeno un sensore di presenza quando l'override è attivo.",
+      "missing_schedule_entity": "Devi selezionare un'entità programmazione quando l'override è attivo.",
+      "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo."
     }
   },
   "options": {
@@ -80,6 +85,11 @@
           "away_temp": "Temperatura Away della stanza (°C)"
         }
       }
+    },
+    "error": {
+      "missing_presence_sensors": "Devi selezionare almeno un sensore di presenza quando l'override è attivo.",
+      "missing_schedule_entity": "Devi selezionare un'entità programmazione quando l'override è attivo.",
+      "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo."
     }
   }
 }

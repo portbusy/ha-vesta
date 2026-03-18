@@ -43,6 +43,11 @@
           "away_temp": "Room Away Temperature (°C)"
         }
       }
+    },
+    "error": {
+      "missing_presence_sensors": "You must select at least one presence sensor when override is enabled.",
+      "missing_schedule_entity": "You must select a schedule entity when override is enabled.",
+      "missing_weather_entity": "You must select a weather provider when override is enabled."
     }
   },
   "options": {
@@ -80,6 +85,11 @@
           "away_temp": "Room Away Temperature (°C)"
         }
       }
+    },
+    "error": {
+      "missing_presence_sensors": "You must select at least one presence sensor when override is enabled.",
+      "missing_schedule_entity": "You must select a schedule entity when override is enabled.",
+      "missing_weather_entity": "You must select a weather provider when override is enabled."
     }
   }
 }

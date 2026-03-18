@@ -255,8 +255,45 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return base
 
     async def _update_state(self):
-        # Global & Geo logic (Omitted for brevity, remains the same as previous stable version)
-        pass
+        """Update internal state based on global settings, schedule and presence."""
+        g = self.hass.data[DOMAIN].get("global")
+        if not g:
+            return
+
+        # 1. Vacation Mode (Global)
+        vacation_status = g.data.get(CONF_VACATION_STATE, "off")
+        self._vacation_active = (vacation_status == "on")
+
+        # 2. Schedule Logic
+        sched_id = self._data.get(CONF_SCHEDULE) if self._data.get(CONF_OVERRIDE_SCHEDULE) else g.data.get(CONF_SCHEDULE)
+        if sched_id and (s_state := self.hass.states.get(sched_id)):
+            # If schedule is ON, target is comfort, else eco
+            self._target_temp = self.comfort_temp if s_state.state == STATE_ON else self.eco_temp
+
+        # 3. Presence & Geofencing
+        presence_ids = self._data.get(CONF_PRESENCE_SENSORS) if self._data.get(CONF_OVERRIDE_PRESENCE) else g.data.get(CONF_PRESENCE_SENSORS)
+        if presence_ids:
+            any_home = False
+            min_dist = 999999.0
+            for pid in presence_ids:
+                if (p_state := self.hass.states.get(pid)):
+                    if p_state.state == "home":
+                        any_home = True
+                        min_dist = 0.0
+                        break
+                    # Calculate distance if tracker has coordinates
+                    lat = p_state.attributes.get(ATTR_LATITUDE)
+                    lon = p_state.attributes.get(ATTR_LONGITUDE)
+                    if lat and lon and self.hass.config.latitude and self.hass.config.longitude:
+                        dist = location.distance(lat, lon, self.hass.config.latitude, self.hass.config.longitude)
+                        if dist < min_dist: min_dist = dist
+            
+            self._nearest_distance = min_dist
+            if any_home:
+                if self._preset_mode == MODE_AWAY:
+                    self._preset_mode = MODE_SMART_SCHEDULE
+            elif self._preset_mode != MODE_MANUAL:
+                self._preset_mode = MODE_AWAY
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -267,14 +304,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._heating_rate = old.attributes.get(ATTR_HEATING_RATE, self._heating_rate)
             self._cooling_rate = old.attributes.get(ATTR_COOLING_RATE, self._cooling_rate)
             self._daily_usage_seconds = old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
-            # Restore last known temperature to bridge the gap during restart
             if old.state not in ("unknown", "unavailable") and self._cur_temp is None:
                 try:
                     self._cur_temp = float(old.attributes.get("current_temperature") or old.state)
                 except (ValueError, TypeError):
                     pass
 
-        # Try to get current sensor state immediately
         if self._sensor_id and (state := self.hass.states.get(self._sensor_id)):
             if state.state not in ("unknown", "unavailable"):
                 try:
@@ -284,6 +319,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         self.async_on_remove(async_track_time_interval(self.hass, self._async_tick, timedelta(minutes=1)))
         self._setup_listeners()
+        # Initial update
+        self.hass.async_create_task(self._async_tick(None))
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""
@@ -294,10 +331,26 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     def _setup_listeners(self):
         for listener in self._event_listeners: listener()
         self._event_listeners = []
+        
+        # Temp Sensor
         if self._sensor_id:
             self._event_listeners.append(async_track_state_change_event(self.hass, [self._sensor_id], self._on_sensor))
+        
+        # Window Sensor
         if self._window_sensor_id:
             self._event_listeners.append(async_track_state_change_event(self.hass, [self._window_sensor_id], self._on_window))
+
+        # Heater Entities
+        if self._heaters:
+            self._event_listeners.append(async_track_state_change_event(self.hass, self._heaters, self._on_heater_change))
+
+    @callback
+    def _on_heater_change(self, event):
+        """Update internal state if a heater is changed externally."""
+        s = event.data.get("new_state")
+        if s:
+            self._last_heater_state = (s.state == STATE_ON)
+            self.async_write_ha_state()
 
     @callback
     def _on_sensor(self, event):

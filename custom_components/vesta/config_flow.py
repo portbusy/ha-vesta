@@ -7,7 +7,6 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
-import homeassistant.helpers.config_validation as cv
 
 from .const import (
     DOMAIN,
@@ -34,6 +33,15 @@ from .const import (
     CONF_OVERRIDE_SCHEDULE,
     DEFAULT_NAME,
 )
+
+def _validate_overrides(user_input: dict[str, Any], errors: dict[str, str]) -> None:
+    """Validate that if an override is enabled, the corresponding entity is provided."""
+    if user_input.get(CONF_OVERRIDE_PRESENCE) and not user_input.get(CONF_PRESENCE_SENSORS):
+        errors[CONF_PRESENCE_SENSORS] = "missing_presence_sensors"
+    if user_input.get(CONF_OVERRIDE_SCHEDULE) and not user_input.get(CONF_SCHEDULE):
+        errors[CONF_SCHEDULE] = "missing_schedule_entity"
+    if user_input.get(CONF_OVERRIDE_WEATHER) and not user_input.get(CONF_WEATHER):
+        errors[CONF_WEATHER] = "missing_weather_entity"
 
 class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Vesta."""
@@ -105,16 +113,19 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Handle room settings."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            user_input[CONF_ENTRY_TYPE] = ENTRY_TYPE_ROOM
-            return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
+            _validate_overrides(user_input, errors)
+            if not errors:
+                user_input[CONF_ENTRY_TYPE] = ENTRY_TYPE_ROOM
+                return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
 
         return self.async_show_form(
             step_id="room",
             data_schema=vol.Schema({
                 vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
                 vol.Required(CONF_HEATER_ENTITIES): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["climate", "switch"], multiple=True)
+                    selector.EntitySelectorConfig(domain=["climate", "switch", "water_heater"], multiple=True)
                 ),
                 vol.Required(CONF_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
@@ -139,6 +150,7 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_OVERRIDE_AWAY, default=False): selector.BooleanSelector(),
                 vol.Optional(CONF_AWAY_TEMP, default=15.0): vol.Coerce(float),
             }),
+            errors=errors,
         )
 
     @staticmethod
@@ -168,7 +180,6 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.ConfigFlowResult:
         """Update global settings."""
         if user_input is not None:
-            # We update the entry data directly as Vesta uses it
             new_data = {**self.config_entry.data, **user_input}
             self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
             return self.async_create_entry(title="", data={})
@@ -206,10 +217,13 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Update room settings."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            new_data = {**self.config_entry.data, **user_input}
-            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
-            return self.async_create_entry(title="", data={})
+            _validate_overrides(user_input, errors)
+            if not errors:
+                new_data = {**self.config_entry.data, **user_input}
+                self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+                return self.async_create_entry(title="", data={})
 
         current = self.config_entry.data
         return self.async_show_form(
@@ -217,7 +231,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({
                 vol.Required(CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)): str,
                 vol.Required(CONF_HEATER_ENTITIES, default=current.get(CONF_HEATER_ENTITIES, [])): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["climate", "switch"], multiple=True)
+                    selector.EntitySelectorConfig(domain=["climate", "switch", "water_heater"], multiple=True)
                 ),
                 vol.Required(CONF_SENSOR, default=current.get(CONF_SENSOR)): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
@@ -242,4 +256,5 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(CONF_OVERRIDE_AWAY, default=current.get(CONF_OVERRIDE_AWAY, False)): selector.BooleanSelector(),
                 vol.Optional(CONF_AWAY_TEMP, default=current.get(CONF_AWAY_TEMP, 15.0)): vol.Coerce(float),
             }),
+            errors=errors,
         )
