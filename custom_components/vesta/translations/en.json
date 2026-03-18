@@ -3,16 +3,45 @@
     "step": {
       "user": {
         "title": "Vesta Configuration",
-        "description": "Configure your radiator as a Tado-like smart device.",
+        "description": "Choose between adding a new room or setting up global home defaults.",
+        "menu_options": {
+          "room": "Add a new Room",
+          "global": "Configure Home Defaults"
+        }
+      },
+      "global": {
+        "title": "Global Home Settings",
+        "description": "These defaults apply to all rooms unless overridden.",
         "data": {
-          "name": "Integration Name",
-          "heater": "Heater Entity (TRV, Switch, etc.)",
-          "target_sensor": "Room Temperature Sensor",
+          "comfort_temp": "Default Comfort Temperature (°C)",
+          "eco_temp": "Default Eco Temperature (°C)",
+          "away_temp": "Default Away Temperature (°C)",
+          "avg_travel_speed": "Average Travel Speed (km/h)",
+          "presence_sensors": "Global Presence Sensors",
+          "schedule_entity": "Global Schedule",
+          "weather_entity": "Weather Provider",
+          "override_switch": "Manual Override Switch",
+          "vacation_state": "Vacation Mode"
+        }
+      },
+      "room": {
+        "title": "Room Configuration",
+        "description": "Configure radiators and sensors for a specific room.",
+        "data": {
+          "name": "Room Name",
+          "heaters": "Heater Entities (TRVs, Switches, etc.)",
+          "target_sensor": "Temperature Sensor",
           "window_sensor": "Window/Door Sensor (Optional)",
-          "presence_sensor": "Presence/Person Sensor (Optional)",
-          "schedule_entity": "Schedule Entity (Optional)",
-          "comfort_temp": "Comfort Temperature (°C)",
-          "eco_temp": "Eco Temperature (°C)"
+          "override_presence": "Override Global Presence",
+          "presence_sensors": "Room Presence Sensors",
+          "override_schedule": "Override Global Schedule",
+          "schedule_entity": "Room Schedule",
+          "override_weather": "Override Global Weather",
+          "weather_entity": "Room Weather Provider",
+          "override_comfort": "Override Global Comfort Temp",
+          "comfort_temp": "Room Comfort Temperature (°C)",
+          "override_away": "Override Global Away Temp",
+          "away_temp": "Room Away Temperature (°C)"
         }
       }
     }

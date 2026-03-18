@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurazione Vesta",
+        "description": "Scegli se aggiungere una nuova stanza o configurare le impostazioni predefinite della casa.",
+        "menu_options": {
+          "room": "Aggiungi una nuova stanza",
+          "global": "Configura impostazioni predefinite"
+        }
+      },
+      "global": {
+        "title": "Impostazioni Globali",
+        "description": "Queste impostazioni si applicano a tutte le stanze a meno che non vengano sovrascritte.",
+        "data": {
+          "comfort_temp": "Temperatura Comfort predefinita (°C)",
+          "eco_temp": "Temperatura Eco predefinita (°C)",
+          "away_temp": "Temperatura Away predefinita (°C)",
+          "avg_travel_speed": "Velocità media di viaggio (km/h)",
+          "presence_sensors": "Sensori di presenza globali",
+          "schedule_entity": "Programmazione globale",
+          "weather_entity": "Fornitore meteo",
+          "override_switch": "Interruttore di override manuale",
+          "vacation_state": "Modalità vacanza"
+        }
+      },
+      "room": {
+        "title": "Configurazione Stanza",
+        "description": "Configura i radiatori e i sensori per una stanza specifica.",
+        "data": {
+          "name": "Nome della stanza",
+          "heaters": "Entità di riscaldamento (TRV, interruttori, ecc.)",
+          "target_sensor": "Sensore di temperatura",
+          "window_sensor": "Sensore finestra/porta (Opzionale)",
+          "override_presence": "Sovrascrivi presenza globale",
+          "presence_sensors": "Sensori di presenza della stanza",
+          "override_schedule": "Sovrascrivi programmazione globale",
+          "schedule_entity": "Programmazione della stanza",
+          "override_weather": "Sovrascrivi meteo globale",
+          "weather_entity": "Fornitore meteo della stanza",
+          "override_comfort": "Sovrascrivi temp. comfort globale",
+          "comfort_temp": "Temperatura Comfort della stanza (°C)",
+          "override_away": "Sovrascrivi temp. away globale",
+          "away_temp": "Temperatura Away della stanza (°C)"
+        }
+      }
+    }
+  }
+}
