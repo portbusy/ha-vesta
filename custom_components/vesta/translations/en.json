@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Smart Climate Pro Configuration",
+        "title": "Vesta Configuration",
         "description": "Configure your radiator as a Tado-like smart device.",
         "data": {
           "name": "Integration Name",

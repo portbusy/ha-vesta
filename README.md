@@ -1,4 +1,4 @@
-# Smart Climate Pro (Tado-like for Home Assistant)
+# Vesta (Tado-like for Home Assistant)
 
 Advanced predictive and learning climate controller for Home Assistant.
 

@@ -1,6 +1,6 @@
-"""Constants for Smart Climate Pro with Full Global/Local logic."""
+"""Constants for Vesta with Full Global/Local logic."""
 
-DOMAIN = "smart_climate_pro"
+DOMAIN = "vesta"
 CONF_HEATER_ENTITIES = "heaters"
 CONF_SENSOR = "target_sensor"
 CONF_WINDOW_SENSOR = "window_sensor"

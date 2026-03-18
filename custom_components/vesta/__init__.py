@@ -1,4 +1,4 @@
-"""The Smart Climate Pro integration."""
+"""The Vesta integration."""
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
@@ -9,7 +9,7 @@ from .const import DOMAIN, CONF_ENTRY_TYPE, ENTRY_TYPE_GLOBAL
 PLATFORMS: list[str] = ["climate"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Smart Climate Pro entry."""
+    """Set up Vesta entry."""
     hass.data.setdefault(DOMAIN, {"global": None, "rooms": []})
     
     # If this is the global settings entry
