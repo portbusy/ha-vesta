@@ -113,7 +113,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # State
         self._cur_temp: float | None = None
         self._outdoor_temp: float | None = None
-        self._target_temp: float = 21.0
+        self._target_temp: float | None = None  # Issue 3: init from global on first tick
         self._hvac_mode = HVACMode.HEAT
         self._preset_mode = MODE_SMART_SCHEDULE
         self._window_open = False
@@ -121,7 +121,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._force_return = False
         self._nearest_distance = 0.0
 
-        # Duty cycle tracking (Bug 1 fix)
+        # Duty cycle tracking
         self._duty_history: deque[bool] = deque(maxlen=DUTY_CYCLE_WINDOW)
         self._heating_power = 0.0
 
@@ -131,7 +131,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_learning_temp: float | None = None
         self._last_learning_time: float | None = None
 
-        # Daily usage tracking (Bug 5 fix)
+        # Daily usage tracking
         self._daily_usage_seconds = 0
         self._last_usage_reset_date: date | None = None
 
@@ -185,7 +185,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return max(0, int((MANUAL_OVERRIDE_TIMEOUT_HRS * 60) - elapsed))
 
     def _update_heating_power(self, heater_on: bool) -> None:
-        """Track duty cycle to compute heating power percentage (Bug 1 fix)."""
+        """Track duty cycle to compute heating power percentage."""
         self._duty_history.append(heater_on)
         if self._duty_history:
             self._heating_power = (
@@ -193,7 +193,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ) * 100.0
 
     def _check_daily_reset(self) -> None:
-        """Reset daily usage counter at midnight (Bug 5 fix)."""
+        """Reset daily usage counter at midnight."""
         today = date.today()
         if self._last_usage_reset_date != today:
             self._daily_usage_seconds = 0
@@ -213,6 +213,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 self._name,
             )
             self._preset_mode = MODE_SMART_SCHEDULE
+            self._force_return = False
 
         # 2. Safety Check: Sensor failure
         if self._cur_temp is None:
@@ -225,28 +226,30 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # 3. Frost Guard (Priority over Window Open)
         frost_risk = self._cur_temp < ANTI_FROST_TEMP
 
-        # 4. Control Logic
+        # 4. Compute effective target (pure read, no side effects)
+        effective_target = self._compute_effective_target()
+
+        # 5. Control Logic
         heater_on = False
         if self._hvac_mode == HVACMode.HEAT:
             if self._window_open and not frost_risk:
                 heater_on = False
             else:
-                # Normal or Frost-Forced Heating
                 target = (
-                    self.target_temperature
+                    effective_target
                     if not frost_risk
                     else (ANTI_FROST_TEMP + 1.0)
                 )
                 heater_on = self._cur_temp < (target - 0.2)
         await self._set_heaters(heater_on)
 
-        # 5. Update duty cycle
+        # 6. Update duty cycle
         self._update_heating_power(heater_on)
 
-        # 6. Hardware Failure Detection
+        # 7. Hardware Failure Detection
         self._check_hardware_performance()
 
-        # 7. Learning
+        # 8. Learning
         if not (
             self._vacation_active
             or self._force_return
@@ -256,6 +259,43 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._update_learning()
 
         self.async_write_ha_state()
+
+    def _compute_effective_target(self) -> float:
+        """Compute the effective target temperature (Issue 1: no side-effects).
+
+        This is the core temperature decision logic, separated from the
+        property to avoid side-effects.
+        """
+        if self._vacation_active:
+            return ANTI_FROST_TEMP
+        if self._force_return:
+            return self.comfort_temp
+        if self._preset_mode == MODE_MANUAL:
+            return self._target_temp or self.comfort_temp
+
+        base = self._target_temp or self.comfort_temp
+
+        # Weather compensation: boost when it's very cold outside
+        if self._outdoor_temp is not None and self._outdoor_temp < 5:
+            base += (5 - self._outdoor_temp) * 0.1
+
+        if self._preset_mode == MODE_AWAY and self._cur_temp is not None:
+            # Check if person is close enough to start pre-heating
+            avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)  # Issue 6: div-by-zero guard
+            h_rate = max(self._heating_rate, MIN_HEATING_RATE)  # Issue 6: div-by-zero guard
+
+            travel_time_min = (self._nearest_distance / 1000) / (avg_speed / 60)
+            temp_deficit = base - self._cur_temp
+            if temp_deficit > 0:
+                heat_time_min = temp_deficit / h_rate
+                if travel_time_min <= heat_time_min:
+                    # Person arriving soon — activate pre-heating (Issue 1: moved here)
+                    self._force_return = True
+                    return base
+            return (
+                self.away_temp if self._nearest_distance > 15000 else self.eco_temp
+            )
+        return base
 
     def _check_hardware_performance(self):
         """Detect if heaters are on but room is not warming up."""
@@ -268,10 +308,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
             # Check every 45 minutes of continuous high power
             if (now - self._stuck_check_time) > 2700:
-                expected_rise = (
-                    self._heating_rate * 45 * 0.5
-                )  # Expect at least 50% of learned rate
-                actual_rise = self._cur_temp - self._stuck_check_temp
+                expected_rise = self._heating_rate * 45 * 0.5
+                actual_rise = (self._cur_temp or 0) - (self._stuck_check_temp or 0)
 
                 if actual_rise < 0.1 and actual_rise < expected_rise:
                     _LOGGER.error(
@@ -295,11 +333,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._last_learning_temp = self._cur_temp
             self._last_learning_time = now
             return
-        dt = (now - self._last_learning_time) / 60
+        dt = (now - (self._last_learning_time or now)) / 60
         if dt < 15:
             return
 
-        rate = abs((self._cur_temp - self._last_learning_temp) / dt)
+        rate = abs((self._cur_temp - self._last_learning_temp) / max(dt, 0.1))
         # Clamping: ignore impossible values
         if rate < MIN_HEATING_RATE or rate > MAX_HEATING_RATE:
             return
@@ -317,6 +355,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_learning_time = now
 
     async def _set_heaters(self, on: bool):
+        # Issue 4: Count usage BEFORE early return so every on-tick counts
         if on:
             self._daily_usage_seconds += 60
         if self._last_heater_state == on:
@@ -351,40 +390,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @property
     def target_temperature(self) -> float:
-        if self._vacation_active:
-            return ANTI_FROST_TEMP
-        if self._force_return:
-            return self.comfort_temp
-        if self._preset_mode == MODE_MANUAL:
-            return self._target_temp
-
-        base = self._target_temp
-        if self._outdoor_temp is not None and self._outdoor_temp < 5:
-            base += (5 - self._outdoor_temp) * 0.1
-
-        if self._preset_mode == MODE_AWAY and self._cur_temp:
-            travel_time_min = (self._nearest_distance / 1000) / (
-                self._get_global(CONF_AVG_SPEED, 50.0) / 60
-            )
-            heat_time_min = (base - self._cur_temp) / self._heating_rate
-            if travel_time_min <= heat_time_min:
-                # Person arriving soon, start pre-heating (Bug 4 fix)
-                self._force_return = True
-                return base
-            return (
-                self.away_temp if self._nearest_distance > 15000 else self.eco_temp
-            )
-        return base
+        """Return the target temperature (Issue 1: pure read-only, no side-effects)."""
+        return self._compute_effective_target()
 
     async def _update_state(self):
         """Update internal state based on global settings, schedule, presence and weather."""
         g = self.hass.data[DOMAIN].get("global")
         if not g:
+            # Issue 3: Still init target_temp from hardcoded comfort if no global
+            if self._target_temp is None:
+                self._target_temp = 21.0
             return
+
+        # Issue 3: Initialize target_temp from global comfort on first run
+        if self._target_temp is None:
+            self._target_temp = self.comfort_temp
 
         # 1. Vacation Mode (Global)
         vacation_status = g.data.get(CONF_VACATION_STATE, False)
-        # Support both old string "on"/"off" and new boolean format
         if isinstance(vacation_status, str):
             self._vacation_active = vacation_status == "on"
         else:
@@ -398,7 +421,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 else g.data.get(CONF_SCHEDULE)
             )
             if sched_id and (s_state := self.hass.states.get(sched_id)):
-                # If schedule is ON, target is comfort, else eco
                 self._target_temp = (
                     self.comfort_temp
                     if s_state.state == STATE_ON
@@ -420,7 +442,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         any_home = True
                         min_dist = 0.0
                         break
-                    # Calculate distance if tracker has coordinates
                     lat = p_state.attributes.get(ATTR_LATITUDE)
                     lon = p_state.attributes.get(ATTR_LONGITUDE)
                     if (
@@ -442,12 +463,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             if any_home:
                 if self._preset_mode == MODE_AWAY:
                     self._preset_mode = MODE_SMART_SCHEDULE
-                    self._force_return = False  # Reset when person arrives
+                # Issue 2: Reset force_return when someone is home
+                self._force_return = False
             elif self._preset_mode != MODE_MANUAL:
                 self._preset_mode = MODE_AWAY
-                self._force_return = False  # Reset force return when leaving
+                self._force_return = False
 
-        # 4. Weather / Outdoor Temperature (Bug 2 fix)
+        # 4. Weather / Outdoor Temperature
         weather_id = (
             self._data.get(CONF_WEATHER)
             if self._data.get(CONF_OVERRIDE_WEATHER)
@@ -545,7 +567,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
-        # Weather Entity listener (Bug 2 fix)
+        # Weather Entity listener
         g = self.hass.data[DOMAIN].get("global")
         weather_id = self._data.get(CONF_WEATHER) if self._data.get(
             CONF_OVERRIDE_WEATHER
@@ -583,7 +605,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @callback
     def _on_weather(self, event):
-        """Update outdoor temperature from weather entity (Bug 2 fix)."""
+        """Update outdoor temperature from weather entity."""
         s = event.data.get("new_state")
         if s:
             temp = s.attributes.get("temperature")
@@ -597,6 +619,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if t := kwargs.get(ATTR_TEMPERATURE):
             self._target_temp = t
             self._preset_mode = MODE_MANUAL
+            self._force_return = False
             self._manual_start_time = time.time()
             await self._async_tick(None)
 
@@ -622,6 +645,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def async_set_preset_mode(self, m: str) -> None:
         self._preset_mode = m
+        self._force_return = False  # Issue 2: Reset on any preset change
         if m == MODE_MANUAL:
             self._manual_start_time = time.time()
         await self._async_tick(None)

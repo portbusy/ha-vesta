@@ -184,43 +184,57 @@ def _overrides_schema(
 
 
 def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
-    """Find heaters, temp sensors, and window sensors in an area."""
+    """Find heaters, temp sensors, and window sensors in an area.
+
+    Returns both the default values (entity IDs) and the full option lists
+    for SelectSelector so the user only sees entities from the area.
+    """
     registry = er.async_get(hass)
     entities = er.async_entries_for_area(registry, area_id)
 
-    heaters = []
-    temp_sensor = None
-    window_sensor = None
+    heater_options: list[selector.SelectOptionDict] = []
+    heater_defaults: list[str] = []
+    temp_options: list[selector.SelectOptionDict] = []
+    temp_default: str | None = None
+    window_options: list[selector.SelectOptionDict] = []
+    window_default: str | None = None
 
     for entry in entities:
         if entry.disabled:
             continue
         domain = entry.domain
+        label = entry.name or entry.original_name or entry.entity_id
 
         # Heaters: climate, switch, or water_heater entities
         if domain in ("climate", "switch", "water_heater"):
-            heaters.append(entry.entity_id)
+            heater_options.append(
+                selector.SelectOptionDict(value=entry.entity_id, label=label)
+            )
+            heater_defaults.append(entry.entity_id)
 
         # Temperature sensor
-        if (
-            domain == "sensor"
-            and entry.device_class == "temperature"
-            and temp_sensor is None
-        ):
-            temp_sensor = entry.entity_id
+        if domain == "sensor" and entry.device_class == "temperature":
+            temp_options.append(
+                selector.SelectOptionDict(value=entry.entity_id, label=label)
+            )
+            if temp_default is None:
+                temp_default = entry.entity_id
 
         # Window sensor
-        if (
-            domain == "binary_sensor"
-            and entry.device_class == "window"
-            and window_sensor is None
-        ):
-            window_sensor = entry.entity_id
+        if domain == "binary_sensor" and entry.device_class == "window":
+            window_options.append(
+                selector.SelectOptionDict(value=entry.entity_id, label=label)
+            )
+            if window_default is None:
+                window_default = entry.entity_id
 
     return {
-        CONF_HEATER_ENTITIES: heaters,
-        CONF_SENSOR: temp_sensor,
-        CONF_WINDOW_SENSOR: window_sensor,
+        CONF_HEATER_ENTITIES: heater_defaults,
+        CONF_SENSOR: temp_default,
+        CONF_WINDOW_SENSOR: window_default,
+        "heater_options": heater_options,
+        "temp_options": temp_options,
+        "window_options": window_options,
     }
 
 
@@ -386,21 +400,81 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         default_heaters = d.get(CONF_HEATER_ENTITIES, [])
         default_sensor = d.get(CONF_SENSOR)
         default_window = d.get(CONF_WINDOW_SENSOR)
+        has_area = bool(self._area_id)
 
         schema: dict = {
             vol.Required(CONF_NAME, default=default_name): str,
         }
 
-        # Heaters: pre-populate with discovered, but always required
-        if default_heaters:
-            schema[
-                vol.Required(CONF_HEATER_ENTITIES, default=default_heaters)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=["climate", "switch", "water_heater"], multiple=True
+        if has_area:
+            # --- Area selected: use SelectSelector filtered to area entities ---
+            heater_opts = d.get("heater_options", [])
+            temp_opts = d.get("temp_options", [])
+            window_opts = d.get("window_options", [])
+
+            # Heaters (multi-select from area entities)
+            if heater_opts:
+                schema[
+                    vol.Required(CONF_HEATER_ENTITIES, default=default_heaters)
+                ] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=heater_opts,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
                 )
-            )
+            else:
+                # No heaters found in area — fall back to open selector
+                schema[vol.Required(CONF_HEATER_ENTITIES)] = (
+                    selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["climate", "switch", "water_heater"],
+                            multiple=True,
+                        )
+                    )
+                )
+
+            # Temp sensor (single-select from area entities)
+            if temp_opts:
+                default_temp = default_sensor or temp_opts[0]["value"]
+                schema[
+                    vol.Required(CONF_SENSOR, default=default_temp)
+                ] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=temp_opts,
+                        multiple=False,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            else:
+                schema[vol.Required(CONF_SENSOR)] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor", device_class="temperature"
+                    )
+                )
+
+            # Window sensor (single-select from area entities, optional)
+            if window_opts:
+                default_win = default_window or window_opts[0]["value"]
+                schema[
+                    vol.Optional(CONF_WINDOW_SENSOR, default=default_win)
+                ] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=window_opts,
+                        multiple=False,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            else:
+                schema[vol.Optional(CONF_WINDOW_SENSOR)] = (
+                    selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="binary_sensor", device_class="window"
+                        )
+                    )
+                )
         else:
+            # --- No area: use standard EntitySelector (shows all entities) ---
             schema[vol.Required(CONF_HEATER_ENTITIES)] = (
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(
@@ -409,36 +483,16 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 )
             )
-
-        # Temp sensor
-        if default_sensor:
-            schema[
-                vol.Required(CONF_SENSOR, default=default_sensor)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor", device_class="temperature"
-                )
-            )
-        else:
             schema[vol.Required(CONF_SENSOR)] = selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain="sensor", device_class="temperature"
                 )
             )
-
-        # Window sensor — no default=None to avoid validation error
-        if default_window:
-            schema[
-                vol.Optional(CONF_WINDOW_SENSOR, default=default_window)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="binary_sensor", device_class="window"
-                )
-            )
-        else:
-            schema[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="binary_sensor", device_class="window"
+            schema[vol.Optional(CONF_WINDOW_SENSOR)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor", device_class="window"
+                    )
                 )
             )
 
