@@ -1,0 +1,56 @@
+set_schedule:
+  name: Set Schedule
+  description: Set temperature schedule blocks for a specific day or group of days.
+  target:
+    entity:
+      domain: climate
+      integration: vesta
+  fields:
+    day:
+      name: Day
+      description: "Day of the week, or a group: weekdays, weekends, all."
+      required: true
+      selector:
+        select:
+          options:
+            - monday
+            - tuesday
+            - wednesday
+            - thursday
+            - friday
+            - saturday
+            - sunday
+            - weekdays
+            - weekends
+            - all
+    blocks:
+      name: Blocks
+      description: "JSON array of time blocks. Each block: {\"start\": \"HH:MM\", \"temp\": 22.0}. Blocks must be sorted by start time."
+      required: true
+      example: '[{"start": "06:00", "temp": 22.0}, {"start": "08:30", "temp": 18.0}]'
+      selector:
+        text:
+
+clear_schedule:
+  name: Clear Schedule
+  description: Remove all schedule blocks for a day or all days.
+  target:
+    entity:
+      domain: climate
+      integration: vesta
+  fields:
+    day:
+      name: Day
+      description: "Day to clear, or 'all' to clear the entire schedule."
+      required: true
+      selector:
+        select:
+          options:
+            - monday
+            - tuesday
+            - wednesday
+            - thursday
+            - friday
+            - saturday
+            - sunday
+            - all

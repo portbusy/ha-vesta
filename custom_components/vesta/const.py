@@ -11,6 +11,7 @@ CONF_OVERRIDE_SWITCH = "override_switch"
 CONF_VACATION_STATE = "vacation_state"
 CONF_NAME = "name"
 CONF_AREA = "area"
+CONF_SCHEDULE_SLOTS = "schedule_slots"
 
 # Config Type
 CONF_ENTRY_TYPE = "entry_type"

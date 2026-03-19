@@ -40,6 +40,7 @@ from .const import (
     CONF_WINDOW_SENSOR,
     CONF_PRESENCE_SENSORS,
     CONF_SCHEDULE,
+    CONF_SCHEDULE_SLOTS,
     CONF_WEATHER,
     CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
@@ -65,6 +66,8 @@ from .const import (
     ATTR_VACATION_MODE,
     ATTR_OUTDOOR_TEMP,
 )
+
+DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -179,6 +182,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "preset_mode": self._preset_mode,
             "target_temp": self._target_temp,
             "manual_start_time": self._manual_start_time,
+            CONF_SCHEDULE_SLOTS: self._data.get(CONF_SCHEDULE_SLOTS, {}),
         }
 
     def _get_manual_timeout(self) -> int:
@@ -396,6 +400,59 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Return the target temperature (Issue 1: pure read-only, no side-effects)."""
         return self._compute_effective_target()
 
+    def _get_scheduled_temp(self) -> float | None:
+        """Return the temperature for the current time slot, or None if no slots defined.
+
+        Reads schedule_slots from room data (with override) or global data.
+        Each day has a sorted list of {start: "HH:MM", temp: float} blocks.
+        The active block is the last one whose start <= current time.
+        If no block matches yet today, use the last block from yesterday
+        (it wraps midnight).
+        """
+        g = self.hass.data[DOMAIN].get("global")
+        if self._data.get(CONF_OVERRIDE_SCHEDULE):
+            slots = self._data.get(CONF_SCHEDULE_SLOTS, {})
+        elif g:
+            slots = g.data.get(CONF_SCHEDULE_SLOTS, {})
+        else:
+            slots = {}
+
+        if not slots:
+            return None
+
+        now = datetime.now()
+        today_name = DAY_NAMES[now.weekday()]
+        now_str = now.strftime("%H:%M")
+
+        today_blocks = slots.get(today_name, [])
+        if not today_blocks:
+            # No blocks for today — check if yesterday's last block carries over
+            yesterday_name = DAY_NAMES[(now.weekday() - 1) % 7]
+            yesterday_blocks = slots.get(yesterday_name, [])
+            if yesterday_blocks:
+                return float(yesterday_blocks[-1]["temp"])
+            return None
+
+        # Find the active block: last block whose start <= now
+        active_temp = None
+        for block in today_blocks:
+            if block["start"] <= now_str:
+                active_temp = float(block["temp"])
+            else:
+                break
+
+        if active_temp is not None:
+            return active_temp
+
+        # Before today's first block — use yesterday's last block
+        yesterday_name = DAY_NAMES[(now.weekday() - 1) % 7]
+        yesterday_blocks = slots.get(yesterday_name, [])
+        if yesterday_blocks:
+            return float(yesterday_blocks[-1]["temp"])
+
+        # Fallback: use today's last block (wraps midnight)
+        return float(today_blocks[-1]["temp"])
+
     async def _update_state(self):
         """Update internal state based on global settings, schedule, presence and weather."""
         g = self.hass.data[DOMAIN].get("global")
@@ -416,19 +473,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         else:
             self._vacation_active = bool(vacation_status)
 
-        # 2. Schedule Logic
+        # 2. Schedule Logic: built-in slots take priority, then HA schedule entity
         if self._preset_mode != MODE_MANUAL:
-            sched_id = (
-                self._data.get(CONF_SCHEDULE)
-                if self._data.get(CONF_OVERRIDE_SCHEDULE)
-                else g.data.get(CONF_SCHEDULE)
-            )
-            if sched_id and (s_state := self.hass.states.get(sched_id)):
-                self._target_temp = (
-                    self.comfort_temp
-                    if s_state.state == STATE_ON
-                    else self.eco_temp
+            scheduled_temp = self._get_scheduled_temp()
+            if scheduled_temp is not None:
+                self._target_temp = scheduled_temp
+            else:
+                # Fallback to HA schedule entity
+                sched_id = (
+                    self._data.get(CONF_SCHEDULE)
+                    if self._data.get(CONF_OVERRIDE_SCHEDULE)
+                    else g.data.get(CONF_SCHEDULE)
                 )
+                if sched_id and (s_state := self.hass.states.get(sched_id)):
+                    self._target_temp = (
+                        self.comfort_temp
+                        if s_state.state == STATE_ON
+                        else self.eco_temp
+                    )
 
         # 3. Presence & Geofencing
         presence_ids = (
