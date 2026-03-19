@@ -15,6 +15,7 @@ from .const import DOMAIN, CONF_ENTRY_TYPE, ENTRY_TYPE_GLOBAL, CONF_SCHEDULE_SLO
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[str] = ["climate"]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 WEEKENDS = ["saturday", "sunday"]
