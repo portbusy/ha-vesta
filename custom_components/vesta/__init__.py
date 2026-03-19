@@ -9,6 +9,8 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
+from homeassistant.components.http import StaticPathConfig
+
 from .const import DOMAIN, CONF_ENTRY_TYPE, ENTRY_TYPE_GLOBAL, CONF_SCHEDULE_SLOTS
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,13 +26,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {"global": None, "rooms": []})
 
     # Register the Lovelace card JS from our www folder
-    hass.http.register_static_path(
-        f"/local/vesta/vesta-schedule-card.js",
-        hass.config.path(
-            "custom_components/vesta/www/vesta-schedule-card.js"
-        ),
-        cache_headers=False,
-    )
+    await hass.http.async_register_static_paths([
+        StaticPathConfig(
+            url_path="/local/vesta/vesta-schedule-card.js",
+            path=hass.config.path(
+                "custom_components/vesta/www/vesta-schedule-card.js"
+            ),
+            cache_headers=False,
+        )
+    ])
 
     # Register as a Lovelace resource
     # Users still need to add the resource in Lovelace config, but we log
