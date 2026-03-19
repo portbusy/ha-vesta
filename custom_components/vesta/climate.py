@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers import entity_registry as er
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     CONF_NAME,
@@ -40,7 +41,6 @@ from .const import (
     CONF_WINDOW_SENSOR,
     CONF_PRESENCE_SENSORS,
     CONF_SCHEDULE,
-    CONF_SCHEDULE_SLOTS,
     CONF_WEATHER,
     CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
@@ -50,7 +50,6 @@ from .const import (
     CONF_AVG_SPEED,
     CONF_OVERRIDE_COMFORT,
     CONF_OVERRIDE_AWAY,
-    CONF_OVERRIDE_SPEED,
     CONF_OVERRIDE_PRESENCE,
     CONF_OVERRIDE_WEATHER,
     CONF_OVERRIDE_SCHEDULE,
@@ -116,7 +115,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # State
         self._cur_temp: float | None = None
         self._outdoor_temp: float | None = None
-        self._target_temp: float | None = None  # Issue 3: init from global on first tick
+        self._target_temp: float | None = None
         self._hvac_mode = HVACMode.HEAT
         self._preset_mode = MODE_SMART_SCHEDULE
         self._window_open = False
@@ -182,7 +181,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "preset_mode": self._preset_mode,
             "target_temp": self._target_temp,
             "manual_start_time": self._manual_start_time,
-            CONF_SCHEDULE_SLOTS: self._data.get(CONF_SCHEDULE_SLOTS, {}),
         }
 
     def _get_manual_timeout(self) -> int:
@@ -268,11 +266,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self.async_write_ha_state()
 
     def _compute_effective_target(self) -> float:
-        """Compute the effective target temperature (Issue 1: no side-effects).
-
-        This is the core temperature decision logic, separated from the
-        property to avoid side-effects.
-        """
+        """Compute the effective target temperature (no side-effects)."""
         if self._vacation_active:
             return ANTI_FROST_TEMP
         if self._force_return:
@@ -287,16 +281,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             base += (5 - self._outdoor_temp) * 0.1
 
         if self._preset_mode == MODE_AWAY and self._cur_temp is not None:
-            # Check if person is close enough to start pre-heating
-            avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)  # Issue 6: div-by-zero guard
-            h_rate = max(self._heating_rate, MIN_HEATING_RATE)  # Issue 6: div-by-zero guard
+            avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)
+            h_rate = max(self._heating_rate, MIN_HEATING_RATE)
 
             travel_time_min = (self._nearest_distance / 1000) / (avg_speed / 60)
             temp_deficit = base - self._cur_temp
             if temp_deficit > 0:
                 heat_time_min = temp_deficit / h_rate
                 if travel_time_min <= heat_time_min:
-                    # Person arriving soon — activate pre-heating (Issue 1: moved here)
                     self._force_return = True
                     return base
             return (
@@ -362,7 +354,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_learning_time = now
 
     async def _set_heaters(self, on: bool):
-        # Issue 4: Count usage BEFORE early return so every on-tick counts
         if on:
             self._daily_usage_seconds += 60
         if self._last_heater_state == on:
@@ -397,72 +388,87 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @property
     def target_temperature(self) -> float:
-        """Return the target temperature (Issue 1: pure read-only, no side-effects)."""
+        """Return the target temperature (pure read-only, no side-effects)."""
         return self._compute_effective_target()
 
-    def _get_scheduled_temp(self) -> float | None:
-        """Return the temperature for the current time slot, or None if no slots defined.
+    def _get_current_schedule_block_data(self, schedule_entity_id: str) -> dict | None:
+        """Legge i dati aggiuntivi del blocco attualmente attivo nello schedule HA."""
+        entity_reg = er.async_get(self.hass)
+        entity_entry = entity_reg.async_get(schedule_entity_id)
+        if not entity_entry or not entity_entry.config_entry_id:
+            return None
 
-        Reads schedule_slots from room data (with override) or global data.
-        Each day has a sorted list of {start: "HH:MM", temp: float} blocks.
-        The active block is the last one whose start <= current time.
-        If no block matches yet today, use the last block from yesterday
-        (it wraps midnight).
-        """
-        g = self.hass.data[DOMAIN].get("global")
-        if self._data.get(CONF_OVERRIDE_SCHEDULE):
-            slots = self._data.get(CONF_SCHEDULE_SLOTS, {})
-        elif g:
-            slots = g.data.get(CONF_SCHEDULE_SLOTS, {})
-        else:
-            slots = {}
-
-        if not slots:
+        config_entry = self.hass.config_entries.async_get_entry(
+            entity_entry.config_entry_id
+        )
+        if not config_entry:
             return None
 
         now = datetime.now()
-        today_name = DAY_NAMES[now.weekday()]
-        now_str = now.strftime("%H:%M")
+        day_name = DAY_NAMES[now.weekday()]
+        now_time = now.time()
 
-        today_blocks = slots.get(today_name, [])
-        if not today_blocks:
-            # No blocks for today — check if yesterday's last block carries over
-            yesterday_name = DAY_NAMES[(now.weekday() - 1) % 7]
-            yesterday_blocks = slots.get(yesterday_name, [])
-            if yesterday_blocks:
-                return float(yesterday_blocks[-1]["temp"])
+        schedule_data = {**config_entry.data, **config_entry.options}
+        day_slots = schedule_data.get(day_name, [])
+
+        for slot in day_slots:
+            try:
+                from_time = datetime.strptime(
+                    slot.get("from", "00:00:00")[:5], "%H:%M"
+                ).time()
+                to_time = datetime.strptime(
+                    slot.get("to", "00:00:00")[:5], "%H:%M"
+                ).time()
+                if from_time <= now_time < to_time:
+                    return slot.get("data") or {}
+            except (ValueError, TypeError):
+                continue
+
+        return None
+
+    def _parse_schedule_block_data(self, block_data: dict | None) -> float | None:
+        """Estrae la temperatura dai dati aggiuntivi del blocco.
+
+        Esempi di JSON validi nel campo 'Dati aggiuntivi':
+        - {"temp": 22.5}        → 22.5°C diretta
+        - {"mode": "comfort"}   → comfort_temp
+        - {"mode": "eco"}       → eco_temp
+        - {"mode": "away"}      → away_temp
+        - {"mode": "frost"}     → ANTI_FROST_TEMP
+        - {}  o assente         → fallback a on/off
+        """
+        if not block_data:
             return None
 
-        # Find the active block: last block whose start <= now
-        active_temp = None
-        for block in today_blocks:
-            if block["start"] <= now_str:
-                active_temp = float(block["temp"])
-            else:
-                break
+        # Campo temp diretto
+        if "temp" in block_data:
+            try:
+                return float(block_data["temp"])
+            except (ValueError, TypeError):
+                pass
 
-        if active_temp is not None:
-            return active_temp
+        # Campo mode
+        mode = str(block_data.get("mode", "")).lower().strip()
+        mode_map = {
+            "comfort": self.comfort_temp,
+            "eco": self.eco_temp,
+            "away": self.away_temp,
+            "frost": ANTI_FROST_TEMP,
+        }
+        if mode in mode_map:
+            return mode_map[mode]
 
-        # Before today's first block — use yesterday's last block
-        yesterday_name = DAY_NAMES[(now.weekday() - 1) % 7]
-        yesterday_blocks = slots.get(yesterday_name, [])
-        if yesterday_blocks:
-            return float(yesterday_blocks[-1]["temp"])
-
-        # Fallback: use today's last block (wraps midnight)
-        return float(today_blocks[-1]["temp"])
+        return None
 
     async def _update_state(self):
         """Update internal state based on global settings, schedule, presence and weather."""
         g = self.hass.data[DOMAIN].get("global")
         if not g:
-            # Issue 3: Still init target_temp from hardcoded comfort if no global
             if self._target_temp is None:
                 self._target_temp = 21.0
             return
 
-        # Issue 3: Initialize target_temp from global comfort on first run
+        # Initialize target_temp from global comfort on first run
         if self._target_temp is None:
             self._target_temp = self.comfort_temp
 
@@ -473,19 +479,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         else:
             self._vacation_active = bool(vacation_status)
 
-        # 2. Schedule Logic: built-in slots take priority, then HA schedule entity
+        # 2. Schedule Logic: HA schedule entity
         if self._preset_mode != MODE_MANUAL:
-            scheduled_temp = self._get_scheduled_temp()
-            if scheduled_temp is not None:
-                self._target_temp = scheduled_temp
-            else:
-                # Fallback to HA schedule entity
-                sched_id = (
-                    self._data.get(CONF_SCHEDULE)
-                    if self._data.get(CONF_OVERRIDE_SCHEDULE)
-                    else g.data.get(CONF_SCHEDULE)
-                )
-                if sched_id and (s_state := self.hass.states.get(sched_id)):
+            sched_id = (
+                self._data.get(CONF_SCHEDULE)
+                if self._data.get(CONF_OVERRIDE_SCHEDULE)
+                else g.data.get(CONF_SCHEDULE)
+            )
+            if sched_id and (s_state := self.hass.states.get(sched_id)):
+                # Leggi i dati aggiuntivi del blocco attivo
+                block_data = self._get_current_schedule_block_data(sched_id)
+                parsed_temp = self._parse_schedule_block_data(block_data)
+
+                if parsed_temp is not None:
+                    # Il blocco ha temp o mode nei dati aggiuntivi
+                    self._target_temp = parsed_temp
+                else:
+                    # Fallback classico: on = comfort, off = eco
                     self._target_temp = (
                         self.comfort_temp
                         if s_state.state == STATE_ON
@@ -528,7 +538,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             if any_home:
                 if self._preset_mode == MODE_AWAY:
                     self._preset_mode = MODE_SMART_SCHEDULE
-                # Issue 2: Reset force_return when someone is home
                 self._force_return = False
             elif self._preset_mode != MODE_MANUAL:
                 self._preset_mode = MODE_AWAY
@@ -556,7 +565,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         old = await self.async_get_last_state()
         if old:
-            # Restore learned rates
             self._heating_rate = old.attributes.get(
                 ATTR_HEATING_RATE, self._heating_rate
             )
@@ -567,16 +575,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
             )
 
-            # Restore HVAC mode
             if old.state in (HVACMode.HEAT, HVACMode.OFF):
                 self._hvac_mode = HVACMode(old.state)
 
-            # Restore preset mode
             restored_preset = old.attributes.get("preset_mode")
             if restored_preset in self._attr_preset_modes:
                 self._preset_mode = restored_preset
 
-            # Restore target temperature
             restored_target = old.attributes.get("target_temp")
             if restored_target is not None:
                 try:
@@ -584,7 +589,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 except (ValueError, TypeError):
                     pass
 
-            # Restore manual start time (for timeout continuity)
             restored_manual_time = old.attributes.get("manual_start_time")
             if (
                 restored_manual_time is not None
@@ -595,7 +599,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 except (ValueError, TypeError):
                     pass
 
-            # Restore current temperature
             if (
                 old.state not in ("unknown", "unavailable")
                 and self._cur_temp is None
@@ -616,7 +619,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 except ValueError:
                     pass
 
-        # Initialize daily reset date
         self._last_usage_reset_date = date.today()
 
         self.async_on_remove(
@@ -625,7 +627,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             )
         )
         self._setup_listeners()
-        # Initial update
         self.hass.async_create_task(self._async_tick(None))
 
     async def async_will_remove_from_hass(self) -> None:
@@ -639,7 +640,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             listener()
         self._event_listeners = []
 
-        # Temp Sensor
         if self._sensor_id:
             self._event_listeners.append(
                 async_track_state_change_event(
@@ -647,7 +647,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
-        # Window Sensor
         if self._window_sensor_id:
             self._event_listeners.append(
                 async_track_state_change_event(
@@ -655,7 +654,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
-        # Heater Entities
         if self._heaters:
             self._event_listeners.append(
                 async_track_state_change_event(
@@ -663,7 +661,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
-        # Weather Entity listener
         g = self.hass.data[DOMAIN].get("global")
         weather_id = self._data.get(CONF_WEATHER) if self._data.get(
             CONF_OVERRIDE_WEATHER
@@ -741,7 +738,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def async_set_preset_mode(self, m: str) -> None:
         self._preset_mode = m
-        self._force_return = False  # Issue 2: Reset on any preset change
+        self._force_return = False
         if m == MODE_MANUAL:
             self._manual_start_time = time.time()
         await self._async_tick(None)
