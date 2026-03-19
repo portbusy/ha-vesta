@@ -420,7 +420,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     slot.get("to", "00:00:00")[:5], "%H:%M"
                 ).time()
                 if from_time <= now_time < to_time:
-                    return slot.get("data") or {}
+                    raw = slot.get("data")
+                    if not raw:
+                        return {}
+                    if isinstance(raw, dict):
+                        return raw
+                    try:
+                        import yaml
+                        parsed = yaml.safe_load(raw)
+                        return parsed if isinstance(parsed, dict) else {}
+                    except Exception:
+                        return {}
             except (ValueError, TypeError):
                 continue
 
