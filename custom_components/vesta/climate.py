@@ -487,20 +487,27 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 else g.data.get(CONF_SCHEDULE)
             )
             if sched_id and (s_state := self.hass.states.get(sched_id)):
-                # Leggi i dati aggiuntivi del blocco attivo
                 block_data = self._get_current_schedule_block_data(sched_id)
-                parsed_temp = self._parse_schedule_block_data(block_data)
 
-                if parsed_temp is not None:
-                    # Il blocco ha temp o mode nei dati aggiuntivi
-                    self._target_temp = parsed_temp
+                # Controlla se il blocco richiede spegnimento
+                mode = str((block_data or {}).get("mode", "")).lower().strip()
+                if mode == "off":
+                    self._hvac_mode = HVACMode.OFF
                 else:
-                    # Fallback classico: on = comfort, off = eco
-                    self._target_temp = (
-                        self.comfort_temp
-                        if s_state.state == STATE_ON
-                        else self.eco_temp
-                    )
+                    # Riattiva se era stato spento dallo schedule
+                    if self._hvac_mode == HVACMode.OFF and self._preset_mode != MODE_MANUAL:
+                        self._hvac_mode = HVACMode.HEAT
+
+                    parsed_temp = self._parse_schedule_block_data(block_data)
+                    if parsed_temp is not None:
+                        self._target_temp = parsed_temp
+                    else:
+                        # Fallback classico: on = comfort, off = eco
+                        self._target_temp = (
+                            self.comfort_temp
+                            if s_state.state == STATE_ON
+                            else self.eco_temp
+                        )
 
         # 3. Presence & Geofencing
         presence_ids = (
