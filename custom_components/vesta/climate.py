@@ -42,7 +42,6 @@ from .const import (
     CONF_PRESENCE_SENSORS,
     CONF_SCHEDULE,
     CONF_WEATHER,
-    CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
     CONF_COMFORT_TEMP,
     CONF_ECO_TEMP,
@@ -210,6 +209,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._check_daily_reset()
 
         await self._update_state()
+        self._update_force_return()
 
         # 1. Manual Timeout Guard: Back to schedule after X hours
         if self._preset_mode == MODE_MANUAL and self._get_manual_timeout() == 0:
@@ -265,9 +265,28 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         self.async_write_ha_state()
 
+    def _update_force_return(self) -> None:
+        """Set _force_return if pre-heating should start for imminent arrival.
+
+        Called only from _async_tick so state mutation stays out of properties.
+        """
+        if self._preset_mode != MODE_AWAY or self._force_return or self._cur_temp is None:
+            return
+        base = self._target_temp or self.comfort_temp
+        if self._outdoor_temp is not None and self._outdoor_temp < 5:
+            base += (5 - self._outdoor_temp) * 0.1
+        avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)
+        h_rate = max(self._heating_rate, MIN_HEATING_RATE)
+        travel_time_min = (self._nearest_distance / 1000) / (avg_speed / 60)
+        temp_deficit = base - self._cur_temp
+        if temp_deficit > 0:
+            heat_time_min = temp_deficit / h_rate
+            if travel_time_min <= heat_time_min:
+                self._force_return = True
+
     def _compute_effective_target(self) -> float:
-        """Compute the effective target temperature (no side-effects)."""
-        if self._vacation_active:
+        """Compute the effective target temperature (pure, no side-effects)."""
+        if self._vacation_active or self._preset_mode == MODE_VACATION:
             return ANTI_FROST_TEMP
         if self._force_return:
             return self.comfort_temp
@@ -280,17 +299,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if self._outdoor_temp is not None and self._outdoor_temp < 5:
             base += (5 - self._outdoor_temp) * 0.1
 
-        if self._preset_mode == MODE_AWAY and self._cur_temp is not None:
-            avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)
-            h_rate = max(self._heating_rate, MIN_HEATING_RATE)
-
-            travel_time_min = (self._nearest_distance / 1000) / (avg_speed / 60)
-            temp_deficit = base - self._cur_temp
-            if temp_deficit > 0:
-                heat_time_min = temp_deficit / h_rate
-                if travel_time_min <= heat_time_min:
-                    self._force_return = True
-                    return base
+        if self._preset_mode == MODE_AWAY:
             return (
                 self.away_temp if self._nearest_distance > 15000 else self.eco_temp
             )
@@ -370,8 +379,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @property
     def comfort_temp(self) -> float:
         """Return the target comfort temperature."""
-        if self._data.get(CONF_OVERRIDE_COMFORT):
-            return float(self._data.get(CONF_COMFORT_TEMP, 21.0))
+        if self._entry.data.get(CONF_OVERRIDE_COMFORT):
+            return float(self._entry.data.get(CONF_COMFORT_TEMP, 21.0))
         return float(self._get_global(CONF_COMFORT_TEMP, 21.0))
 
     @property
@@ -382,8 +391,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @property
     def away_temp(self) -> float:
         """Return the away temperature."""
-        if self._data.get(CONF_OVERRIDE_AWAY):
-            return float(self._data.get(CONF_AWAY_TEMP, 15.0))
+        if self._entry.data.get(CONF_OVERRIDE_AWAY):
+            return float(self._entry.data.get(CONF_AWAY_TEMP, 15.0))
         return float(self._get_global(CONF_AWAY_TEMP, 15.0))
 
     @property
@@ -492,8 +501,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # 2. Schedule Logic: HA schedule entity
         if self._preset_mode != MODE_MANUAL:
             sched_id = (
-                self._data.get(CONF_SCHEDULE)
-                if self._data.get(CONF_OVERRIDE_SCHEDULE)
+                self._entry.data.get(CONF_SCHEDULE)
+                if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
                 else g.data.get(CONF_SCHEDULE)
             )
             if sched_id and (s_state := self.hass.states.get(sched_id)):
@@ -521,8 +530,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # 3. Presence & Geofencing
         presence_ids = (
-            self._data.get(CONF_PRESENCE_SENSORS)
-            if self._data.get(CONF_OVERRIDE_PRESENCE)
+            self._entry.data.get(CONF_PRESENCE_SENSORS)
+            if self._entry.data.get(CONF_OVERRIDE_PRESENCE)
             else g.data.get(CONF_PRESENCE_SENSORS)
         )
         if presence_ids:
@@ -562,8 +571,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # 4. Weather / Outdoor Temperature
         weather_id = (
-            self._data.get(CONF_WEATHER)
-            if self._data.get(CONF_OVERRIDE_WEATHER)
+            self._entry.data.get(CONF_WEATHER)
+            if self._entry.data.get(CONF_OVERRIDE_WEATHER)
             else g.data.get(CONF_WEATHER)
         )
         if weather_id:
@@ -648,6 +657,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""
+        for listener in self._event_listeners:
+            listener()
+        self._event_listeners = []
         if self in self.hass.data[DOMAIN]["rooms"]:
             self.hass.data[DOMAIN]["rooms"].remove(self)
         await super().async_will_remove_from_hass()
@@ -679,7 +691,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             )
 
         g = self.hass.data[DOMAIN].get("global")
-        weather_id = self._data.get(CONF_WEATHER) if self._data.get(
+        weather_id = self._entry.data.get(CONF_WEATHER) if self._entry.data.get(
             CONF_OVERRIDE_WEATHER
         ) else (g.data.get(CONF_WEATHER) if g else None)
         if weather_id:
@@ -703,6 +715,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if s and s.state not in ("unknown", "unavailable"):
             try:
                 self._cur_temp = float(s.state)
+                self.async_write_ha_state()
             except (ValueError, TypeError):
                 pass
 

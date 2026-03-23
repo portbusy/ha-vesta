@@ -26,7 +26,6 @@ CONF_AVG_SPEED = "avg_travel_speed"
 # Override Toggles (per Room)
 CONF_OVERRIDE_COMFORT = "override_comfort"
 CONF_OVERRIDE_AWAY = "override_away"
-CONF_OVERRIDE_SPEED = "override_speed"
 CONF_OVERRIDE_PRESENCE = "override_presence"
 CONF_OVERRIDE_WEATHER = "override_weather"
 CONF_OVERRIDE_SCHEDULE = "override_schedule"
