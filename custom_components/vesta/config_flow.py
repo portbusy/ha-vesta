@@ -412,43 +412,51 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             window_ids = d.get("window_ids", [])
 
             # Heaters: area-filtered EntitySelector, no pre-selection
-            schema[vol.Required(CONF_HEATER_ENTITIES)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    include_entities=heater_ids if heater_ids else None,
-                    domain=["climate", "switch", "water_heater"],
-                    multiple=True,
+            if heater_ids:
+                schema[vol.Required(CONF_HEATER_ENTITIES)] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        include_entities=heater_ids,
+                        multiple=True,
+                    )
                 )
-            )
+            else:
+                schema[vol.Required(CONF_HEATER_ENTITIES)] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["climate", "switch", "water_heater"],
+                        multiple=True,
+                    )
+                )
 
             # Temp sensor: area-filtered, auto-select first found
             temp_kwargs = {}
             if d.get(CONF_SENSOR):
                 temp_kwargs["default"] = d[CONF_SENSOR]
-            schema[vol.Required(CONF_SENSOR, **temp_kwargs)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    include_entities=temp_ids if temp_ids else None,
-                    domain="sensor",
-                    device_class="temperature",
-                )
-            )
-
-            # Window sensor: area-filtered, optional
-            if d.get(CONF_WINDOW_SENSOR):
-                schema[
-                    vol.Optional(CONF_WINDOW_SENSOR, default=d[CONF_WINDOW_SENSOR])
-                ] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        include_entities=window_ids if window_ids else None,
-                        domain="binary_sensor",
-                        device_class="window",
-                    )
+            if temp_ids:
+                schema[vol.Required(CONF_SENSOR, **temp_kwargs)] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(include_entities=temp_ids)
                 )
             else:
-                schema[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
+                schema[vol.Required(CONF_SENSOR, **temp_kwargs)] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        include_entities=window_ids if window_ids else None,
-                        domain="binary_sensor",
-                        device_class="window",
+                        domain="sensor", device_class="temperature"
+                    )
+                )
+
+            # Window sensor: area-filtered, optional
+            win_default = d.get(CONF_WINDOW_SENSOR)
+            win_key = (
+                vol.Optional(CONF_WINDOW_SENSOR, default=win_default)
+                if win_default
+                else vol.Optional(CONF_WINDOW_SENSOR)
+            )
+            if window_ids:
+                schema[win_key] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(include_entities=window_ids)
+                )
+            else:
+                schema[win_key] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor", device_class="window"
                     )
                 )
         else:
@@ -650,51 +658,86 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
 
         if area_id:
             d = _discover_entities_for_area(self.hass, area_id)
-            heater_ids = d.get("heater_ids", [])
-            temp_ids = d.get("temp_ids", [])
-            window_ids = d.get("window_ids", [])
 
-            schema_dict[
-                vol.Required(
-                    CONF_HEATER_ENTITIES,
-                    default=current.get(CONF_HEATER_ENTITIES, []),
+            # Merge saved entities into the discovered lists so that entities
+            # moved out of the area remain selectable and pass validation.
+            heater_ids = list(
+                dict.fromkeys(
+                    d.get("heater_ids", []) + current.get(CONF_HEATER_ENTITIES, [])
                 )
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    include_entities=heater_ids if heater_ids else None,
-                    domain=["climate", "switch", "water_heater"],
-                    multiple=True,
+            )
+            saved_sensor = current.get(CONF_SENSOR)
+            temp_ids = list(
+                dict.fromkeys(
+                    d.get("temp_ids", []) + ([saved_sensor] if saved_sensor else [])
+                )
+            )
+            saved_window = current.get(CONF_WINDOW_SENSOR)
+            window_ids = list(
+                dict.fromkeys(
+                    d.get("window_ids", []) + ([saved_window] if saved_window else [])
                 )
             )
 
-            sensor = current.get(CONF_SENSOR) or d.get(CONF_SENSOR)
-            schema_dict[
-                vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    include_entities=temp_ids if temp_ids else None,
-                    domain="sensor",
-                    device_class="temperature",
-                )
-            )
-
-            window = current.get(CONF_WINDOW_SENSOR)
-            if window:
+            if heater_ids:
                 schema_dict[
-                    vol.Optional(CONF_WINDOW_SENSOR, default=window)
+                    vol.Required(
+                        CONF_HEATER_ENTITIES,
+                        default=current.get(CONF_HEATER_ENTITIES, []),
+                    )
                 ] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        include_entities=window_ids if window_ids else None,
-                        domain="binary_sensor",
-                        device_class="window",
+                        include_entities=heater_ids,
+                        multiple=True,
                     )
                 )
             else:
-                schema_dict[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
+                schema_dict[
+                    vol.Required(
+                        CONF_HEATER_ENTITIES,
+                        default=current.get(CONF_HEATER_ENTITIES, []),
+                    )
+                ] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        include_entities=window_ids if window_ids else None,
-                        domain="binary_sensor",
-                        device_class="window",
+                        domain=["climate", "switch", "water_heater"],
+                        multiple=True,
+                    )
+                )
+
+            sensor = saved_sensor or d.get(CONF_SENSOR)
+            if temp_ids:
+                schema_dict[
+                    vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
+                ] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(include_entities=temp_ids)
+                )
+            else:
+                schema_dict[
+                    vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
+                ] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor", device_class="temperature"
+                    )
+                )
+
+            if window_ids:
+                schema_dict[
+                    vol.Optional(
+                        CONF_WINDOW_SENSOR,
+                        **({"default": saved_window} if saved_window else {}),
+                    )
+                ] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(include_entities=window_ids)
+                )
+            else:
+                schema_dict[
+                    vol.Optional(
+                        CONF_WINDOW_SENSOR,
+                        **({"default": saved_window} if saved_window else {}),
+                    )
+                ] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor", device_class="window"
                     )
                 )
         else:
