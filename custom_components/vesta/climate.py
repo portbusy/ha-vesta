@@ -199,7 +199,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     def _check_daily_reset(self) -> None:
         """Reset daily usage counter at midnight."""
-        today = date.today()
+        today = dt_util.now().date()
         if self._last_usage_reset_date != today:
             self._daily_usage_seconds = 0
             self._last_usage_reset_date = today
@@ -227,7 +227,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # 2. Safety Check: Sensor failure
         if self._cur_temp is None:
             _LOGGER.error("Emergency: Sensor %s is offline!", self._sensor_id)
-            heater_on = (datetime.now().minute % 10) == 0  # Minimal pulse
+            heater_on = (dt_util.now().minute % 10) == 0  # Minimal pulse
             if scheduled and heater_on:
                 self._daily_usage_seconds += 60
             await self._set_heaters(heater_on)
@@ -562,10 +562,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     lat = p_state.attributes.get(ATTR_LATITUDE)
                     lon = p_state.attributes.get(ATTR_LONGITUDE)
                     if (
-                        lat
-                        and lon
-                        and self.hass.config.latitude
-                        and self.hass.config.longitude
+                        lat is not None
+                        and lon is not None
+                        and self.hass.config.latitude is not None
+                        and self.hass.config.longitude is not None
                     ):
                         dist = location.distance(
                             lat,
@@ -668,7 +668,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 for eid in self._heaters
             )
 
-        self._last_usage_reset_date = date.today()
+        self._last_usage_reset_date = dt_util.now().date()
 
         self.async_on_remove(
             async_track_time_interval(
@@ -735,6 +735,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self.hass, [sched_id], self._on_schedule
                 )
             )
+
+        presence_ids = (
+            self._entry.data.get(CONF_PRESENCE_SENSORS)
+            if self._entry.data.get(CONF_OVERRIDE_PRESENCE)
+            else (g.data.get(CONF_PRESENCE_SENSORS) if g else None)
+        )
+        if presence_ids:
+            self._event_listeners.append(
+                async_track_state_change_event(
+                    self.hass, presence_ids, self._on_presence
+                )
+            )
+
+    @callback
+    def _on_presence(self, event):
+        """React immediately when a person's state changes (home/away/GPS update)."""
+        self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_schedule(self, event):
