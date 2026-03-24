@@ -44,6 +44,7 @@ If the heater has been running at full power for 45 minutes but the room tempera
 - **Window detection** — Pauses heating when a window is open. Frost protection still activates even with the window open.
 - **Area auto-discovery** — When adding a room, select a Home Assistant area and Vesta automatically finds the heaters, temperature sensor, and window sensor assigned to it — including entities that inherit the area from their device.
 - **Native TRV / climate entity support** — For climate entities (TRVs, AC units, etc.) Vesta uses `climate.set_hvac_mode` rather than generic turn on/off, so all integrations are controlled correctly regardless of whether they implement a `turn_on` service.
+- **Energy savings tracking** — Each room exposes dedicated sensor entities for heating time and hours saved per feature (away mode, window detection, eco schedule). When energy consumption and price are configured in Global Settings, Vesta also estimates monthly kWh and cost savings.
 
 ---
 
@@ -101,6 +102,43 @@ Each block in a Schedule helper can carry data in the "Additional data" field (v
 4. Then add each **Room** individually. Select the area to auto-discover entities, or configure them manually.
 
 Global settings apply to all rooms by default. When editing a room, you can override any setting (schedule, presence sensors, comfort temperature, away temperature) specifically for that room.
+
+---
+
+## Energy savings tracking
+
+Each room creates 10 sensor entities that can be added directly to your dashboard.
+
+**Daily (reset at midnight):**
+
+| Sensor | Description |
+|--------|-------------|
+| `Heating Minutes Today` | Minutes the heater was actually on today |
+| `Saved Away Hours Today` | Hours in away mode (heater suppressed) |
+| `Saved Window Hours Today` | Hours heating was suppressed due to open window |
+| `Saved Eco Hours Today` | Hours in eco temperature (schedule below comfort) |
+
+**Monthly (reset on the 1st of each month):**
+
+| Sensor | Description |
+|--------|-------------|
+| `Heating Hours Month` | Total heating hours this month |
+| `Saved Away Hours Month` | Total away-mode suppression hours this month |
+| `Saved Window Hours Month` | Total window-suppression hours this month |
+| `Saved Eco Hours Month` | Total eco hours this month |
+
+**Optional — shown only when energy data is configured:**
+
+| Sensor | Description |
+|--------|-------------|
+| `Estimated Savings kWh` | Estimated kWh saved this month |
+| `Estimated Savings EUR` | Estimated cost saved this month |
+
+To enable the kWh/€ estimate, open **Global Home Settings** and fill in:
+- **Energy price (€/kWh)** — your current electricity rate
+- **Annual consumption (kWh)** — your home's total annual heating consumption for the current year
+
+Vesta uses these figures alongside the Fraunhofer Institute methodology (the same approach used by Tado) to estimate savings. The estimate is proportional to the temperature differential saved per feature: away savings are larger when the difference between comfort and away temperature is greater relative to the outdoor temperature.
 
 ---
 

@@ -10,7 +10,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN, CONF_ENTRY_TYPE, ENTRY_TYPE_GLOBAL
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS: list[str] = ["climate"]
+PLATFORMS: list[str] = ["climate", "sensor"]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # Must match ConfigFlow.VERSION in config_flow.py
@@ -30,13 +30,14 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Vesta component."""
-    hass.data.setdefault(DOMAIN, {"global": None, "rooms": []})
+    hass.data.setdefault(DOMAIN, {"global": None, "rooms": [], "climate_entities_by_entry": {}})
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Vesta entry."""
-    hass.data.setdefault(DOMAIN, {"global": None, "rooms": []})
+    hass.data.setdefault(DOMAIN, {"global": None, "rooms": [], "climate_entities_by_entry": {}})
+    hass.data[DOMAIN].setdefault("climate_entities_by_entry", {})
 
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_GLOBAL:
         hass.data[DOMAIN]["global"] = entry
@@ -48,7 +49,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 room.async_write_ha_state()
         return True
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Climate must be set up before sensor so that sensor.py can find the entity.
+    await hass.config_entries.async_forward_entry_setups(entry, ["climate"])
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     entry.async_on_unload(
         entry.add_update_listener(_async_room_options_updated)
     )

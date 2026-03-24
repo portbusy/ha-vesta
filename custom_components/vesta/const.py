@@ -39,6 +39,21 @@ ATTR_NEAREST_DISTANCE = "nearest_distance"
 ATTR_VACATION_MODE = "vacation_mode_active"
 ATTR_OUTDOOR_TEMP = "outdoor_temperature"
 
+# Energy / Savings
+CONF_ENERGY_PRICE_KWH = "energy_price_kwh"
+CONF_ENERGY_ANNUAL_DATA = "energy_annual_data"   # {year_str: kwh_float}
+CONF_ENERGY_KWH_THIS_YEAR = "energy_kwh_this_year"  # UI-only, merged into annual_data
+
+ATTR_SAVED_AWAY_H_TODAY = "saved_away_hours_today"
+ATTR_SAVED_WINDOW_H_TODAY = "saved_window_hours_today"
+ATTR_SAVED_ECO_H_TODAY = "saved_eco_hours_today"
+ATTR_SAVED_AWAY_H_MONTH = "saved_away_hours_month"
+ATTR_SAVED_WINDOW_H_MONTH = "saved_window_hours_month"
+ATTR_SAVED_ECO_H_MONTH = "saved_eco_hours_month"
+ATTR_ACTUAL_HEATING_H_MONTH = "actual_heating_hours_month"
+ATTR_SAVINGS_KWH_MONTH = "estimated_savings_kwh_month"
+ATTR_SAVINGS_EUR_MONTH = "estimated_savings_eur_month"
+
 DEFAULT_NAME = "Smart Climate Control"
 
 # Modes

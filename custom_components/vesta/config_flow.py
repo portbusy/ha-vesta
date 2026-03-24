@@ -38,6 +38,9 @@ from .const import (
     CONF_OVERRIDE_PRESENCE,
     CONF_OVERRIDE_WEATHER,
     CONF_OVERRIDE_SCHEDULE,
+    CONF_ENERGY_PRICE_KWH,
+    CONF_ENERGY_ANNUAL_DATA,
+    CONF_ENERGY_KWH_THIS_YEAR,
     DEFAULT_NAME,
 )
 
@@ -57,6 +60,23 @@ def _temp_selector(
             mode=selector.NumberSelectorMode.SLIDER,
         )
     )
+
+
+# --- Energy data helpers ---
+
+
+def _merge_annual_energy(
+    user_input: dict[str, Any], current: dict[str, Any]
+) -> dict[str, Any]:
+    """Move energy_kwh_this_year into the energy_annual_data dict and remove the UI key."""
+    import datetime
+    kwh = user_input.pop(CONF_ENERGY_KWH_THIS_YEAR, None)
+    if kwh:
+        year = str(datetime.datetime.now().year)
+        annual = dict(current.get(CONF_ENERGY_ANNUAL_DATA) or {})
+        annual[year] = float(kwh)
+        user_input[CONF_ENERGY_ANNUAL_DATA] = annual
+    return user_input
 
 
 # --- Helper to get global config entry ---
@@ -307,6 +327,7 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         """Handle global settings."""
         if user_input is not None:
+            user_input = _merge_annual_energy(user_input, {})
             user_input[CONF_ENTRY_TYPE] = ENTRY_TYPE_GLOBAL
             user_input[CONF_NAME] = "Global Home Settings"
             return self.async_create_entry(title="Home Settings", data=user_input)
@@ -348,6 +369,20 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(
                         CONF_VACATION_STATE, default=False
                     ): selector.BooleanSelector(),
+                    vol.Optional(CONF_ENERGY_PRICE_KWH): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.01, max=2.0, step=0.01,
+                            unit_of_measurement="€/kWh",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(CONF_ENERGY_KWH_THIS_YEAR): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=100, max=100000, step=100,
+                            unit_of_measurement="kWh",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                 }
             ),
         )
@@ -522,6 +557,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.ConfigFlowResult:
         """Update global settings."""
         if user_input is not None:
+            user_input = _merge_annual_energy(user_input, self.config_entry.data)
             new_data = {**self.config_entry.data, **user_input}
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
@@ -624,6 +660,51 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_VACATION_STATE, False),
             )
         ] = selector.BooleanSelector()
+
+        # --- Optional energy data for savings estimate ---
+        import datetime
+        current_year = str(datetime.datetime.now().year)
+        annual_data = current.get(CONF_ENERGY_ANNUAL_DATA) or {}
+        current_year_kwh = annual_data.get(current_year)
+
+        price = current.get(CONF_ENERGY_PRICE_KWH)
+        if price:
+            schema_dict[
+                vol.Optional(CONF_ENERGY_PRICE_KWH, default=float(price))
+            ] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.01, max=2.0, step=0.01,
+                    unit_of_measurement="€/kWh",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH)] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.01, max=2.0, step=0.01,
+                    unit_of_measurement="€/kWh",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
+
+        if current_year_kwh:
+            schema_dict[
+                vol.Optional(CONF_ENERGY_KWH_THIS_YEAR, default=float(current_year_kwh))
+            ] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=100, max=100000, step=100,
+                    unit_of_measurement="kWh/anno",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_ENERGY_KWH_THIS_YEAR)] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=100, max=100000, step=100,
+                    unit_of_measurement="kWh/anno",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
 
         return self.async_show_form(
             step_id="global",

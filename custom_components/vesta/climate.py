@@ -62,6 +62,17 @@ from .const import (
     ATTR_NEAREST_DISTANCE,
     ATTR_VACATION_MODE,
     ATTR_OUTDOOR_TEMP,
+    CONF_ENERGY_PRICE_KWH,
+    CONF_ENERGY_ANNUAL_DATA,
+    ATTR_SAVED_AWAY_H_TODAY,
+    ATTR_SAVED_WINDOW_H_TODAY,
+    ATTR_SAVED_ECO_H_TODAY,
+    ATTR_SAVED_AWAY_H_MONTH,
+    ATTR_SAVED_WINDOW_H_MONTH,
+    ATTR_SAVED_ECO_H_MONTH,
+    ATTR_ACTUAL_HEATING_H_MONTH,
+    ATTR_SAVINGS_KWH_MONTH,
+    ATTR_SAVINGS_EUR_MONTH,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,7 +93,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Vesta climate platform."""
     data = entry.data
-    async_add_entities([SmartClimatePro(hass, entry, data)])
+    entity = SmartClimatePro(hass, entry, data)
+    hass.data[DOMAIN].setdefault("climate_entities_by_entry", {})[entry.entry_id] = entity
+    async_add_entities([entity])
 
 
 class SmartClimatePro(ClimateEntity, RestoreEntity):
@@ -135,6 +148,22 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._daily_usage_seconds = 0
         self._last_usage_reset_date: date | None = None
 
+        # Savings tracking — daily (reset at midnight)
+        self._daily_away_s: int = 0
+        self._daily_window_s: int = 0
+        self._daily_eco_s: int = 0
+
+        # Savings tracking — monthly (reset on 1st of month)
+        self._monthly_actual_heating_s: int = 0
+        self._monthly_away_s: int = 0
+        self._monthly_window_s: int = 0
+        self._monthly_eco_s: int = 0
+        self._last_savings_reset_month: int | None = None
+
+        # Companion sensor entities (set by sensor platform after climate setup)
+        self._companion_sensors: list = []
+        self._savings_cache: dict = {}
+
         # Safety & Fail-safe state
         self._last_heater_state: bool | None = None   # switch/water_heater bang-bang
         self._last_climate_active: bool | None = None  # climate entity setpoint mode
@@ -168,7 +197,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return {
+        attrs: dict[str, Any] = {
             ATTR_HEATING_POWER: round(self._heating_power, 1),
             ATTR_HEATING_RATE: round(self._heating_rate, 4),
             ATTR_COOLING_RATE: round(self._cooling_rate, 4),
@@ -181,7 +210,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "preset_mode": self._preset_mode,
             "target_temp": self._target_temp,
             "manual_start_time": self._manual_start_time,
+            # Savings — daily
+            ATTR_SAVED_AWAY_H_TODAY: round(self._daily_away_s / 3600, 2),
+            ATTR_SAVED_WINDOW_H_TODAY: round(self._daily_window_s / 3600, 2),
+            ATTR_SAVED_ECO_H_TODAY: round(self._daily_eco_s / 3600, 2),
+            # Savings — monthly (also persisted for restore after restart)
+            ATTR_SAVED_AWAY_H_MONTH: round(self._monthly_away_s / 3600, 2),
+            ATTR_SAVED_WINDOW_H_MONTH: round(self._monthly_window_s / 3600, 2),
+            ATTR_SAVED_ECO_H_MONTH: round(self._monthly_eco_s / 3600, 2),
+            ATTR_ACTUAL_HEATING_H_MONTH: round(self._monthly_actual_heating_s / 3600, 2),
+            # Internal monthly state (used by RestoreEntity)
+            "_monthly_actual_heating_s": self._monthly_actual_heating_s,
+            "_monthly_away_s": self._monthly_away_s,
+            "_monthly_window_s": self._monthly_window_s,
+            "_monthly_eco_s": self._monthly_eco_s,
+            "_last_savings_reset_month": self._last_savings_reset_month,
         }
+        attrs.update(self._compute_savings_est())
+        return attrs
 
     def _get_manual_timeout(self) -> int:
         if self._preset_mode != MODE_MANUAL or not self._manual_start_time:
@@ -198,10 +244,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ) * 100.0
 
     def _check_daily_reset(self) -> None:
-        """Reset daily usage counter at midnight."""
-        today = dt_util.now().date()
+        """Reset daily counters at midnight and monthly counters on the 1st."""
+        now = dt_util.now()
+        today = now.date()
+        month = now.month
+
+        if self._last_savings_reset_month != month:
+            self._monthly_actual_heating_s = 0
+            self._monthly_away_s = 0
+            self._monthly_window_s = 0
+            self._monthly_eco_s = 0
+            self._last_savings_reset_month = month
+
         if self._last_usage_reset_date != today:
             self._daily_usage_seconds = 0
+            self._daily_away_s = 0
+            self._daily_window_s = 0
+            self._daily_eco_s = 0
             self._last_usage_reset_date = today
 
     async def _async_tick(self, now):
@@ -264,8 +323,26 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             switch_on = self._cur_temp < (effective_target - 0.2)
 
         # Count usage on scheduled ticks (use switch_on as the "actively heating" proxy)
-        if scheduled and switch_on:
-            self._daily_usage_seconds += 60
+        if scheduled:
+            if switch_on:
+                self._daily_usage_seconds += 60
+                self._monthly_actual_heating_s += 60
+
+            # Feature-specific savings tracking (time smart features kept temp lower)
+            if not frost_risk and self._hvac_mode == HVACMode.HEAT:
+                if self._preset_mode == MODE_AWAY:
+                    self._daily_away_s += 60
+                    self._monthly_away_s += 60
+                elif self._window_open:
+                    self._daily_window_s += 60
+                    self._monthly_window_s += 60
+                elif (
+                    self._preset_mode == MODE_SMART_SCHEDULE
+                    and effective_target < self.comfort_temp
+                ):
+                    self._daily_eco_s += 60
+                    self._monthly_eco_s += 60
+
         await self._set_heaters(switch_on=switch_on, climate_active=climate_active, target_temp=target)
 
         # 6. Update duty cycle
@@ -283,7 +360,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         ):
             self._update_learning()
 
+        self._savings_cache = self._compute_savings_est()
         self.async_write_ha_state()
+        for sensor in self._companion_sensors:
+            sensor.async_write_ha_state()
 
     def _update_force_return(self) -> None:
         """Re-evaluate pre-heating on every tick.
@@ -399,6 +479,51 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         self._last_learning_temp = self._cur_temp
         self._last_learning_time = now
+
+    def _compute_savings_est(self) -> dict[str, Any]:
+        """Estimate monthly kWh/€ savings if energy data is configured globally."""
+        g = self.hass.data[DOMAIN].get("global")
+        if not g:
+            return {}
+        price = g.data.get(CONF_ENERGY_PRICE_KWH)
+        annual_data = g.data.get(CONF_ENERGY_ANNUAL_DATA) or {}
+        annual_kwh = annual_data.get(str(dt_util.now().year))
+        if not annual_kwh or not price:
+            return {}
+
+        annual_kwh = float(annual_kwh)
+        price = float(price)
+        kwh_per_hour = annual_kwh / 8760
+
+        comfort = self.comfort_temp
+        away = self.away_temp
+        eco = self.eco_temp
+        outdoor = self._outdoor_temp
+
+        # Temperature-based effectiveness factors (Fraunhofer-inspired)
+        # When outdoor temperature is known, scale by how much ΔT matters.
+        # Fallback to Fraunhofer study averages when outdoor temp unavailable.
+        if outdoor is not None and comfort > outdoor:
+            base_delta = comfort - outdoor
+            away_factor = max(0.0, (comfort - away) / base_delta)
+            eco_factor = max(0.0, (comfort - eco) / base_delta)
+        else:
+            away_factor = 0.23
+            eco_factor = 0.15
+
+        away_h = self._monthly_away_s / 3600
+        window_h = self._monthly_window_s / 3600
+        eco_h = self._monthly_eco_s / 3600
+
+        saved_kwh = (
+            away_h * away_factor * kwh_per_hour
+            + window_h * 1.0 * kwh_per_hour   # window fully suppresses heating
+            + eco_h * eco_factor * kwh_per_hour
+        )
+        return {
+            ATTR_SAVINGS_KWH_MONTH: round(saved_kwh, 2),
+            ATTR_SAVINGS_EUR_MONTH: round(saved_kwh * price, 2),
+        }
 
     @staticmethod
     def _heater_active(state) -> bool:
@@ -689,6 +814,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._daily_usage_seconds = (
                 old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
             )
+            self._monthly_actual_heating_s = int(
+                old.attributes.get("_monthly_actual_heating_s", 0)
+            )
+            self._monthly_away_s = int(old.attributes.get("_monthly_away_s", 0))
+            self._monthly_window_s = int(old.attributes.get("_monthly_window_s", 0))
+            self._monthly_eco_s = int(old.attributes.get("_monthly_eco_s", 0))
+            self._last_savings_reset_month = old.attributes.get(
+                "_last_savings_reset_month"
+            )
 
             if old.state in (HVACMode.HEAT, HVACMode.OFF):
                 self._hvac_mode = HVACMode(old.state)
@@ -764,6 +898,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._event_listeners = []
         if self in self.hass.data[DOMAIN]["rooms"]:
             self.hass.data[DOMAIN]["rooms"].remove(self)
+        self.hass.data[DOMAIN].get("climate_entities_by_entry", {}).pop(
+            self._entry.entry_id, None
+        )
         await super().async_will_remove_from_hass()
 
     def _setup_listeners(self):
@@ -902,8 +1039,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     def hvac_action(self) -> HVACAction:
         if self._hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
-        if self._last_climate_active or self._last_heater_state:
-            return HVACAction.HEATING
+        if self._cur_temp is not None:
+            effective_target = self._compute_effective_target()
+            frost_risk = self._cur_temp < ANTI_FROST_TEMP
+            target = ANTI_FROST_TEMP if frost_risk else effective_target
+            actively_heating = (frost_risk or (
+                not self._window_open and self._cur_temp < (target - 0.2)
+            ))
+            if actively_heating:
+                return HVACAction.HEATING
         return HVACAction.IDLE
 
     @property
