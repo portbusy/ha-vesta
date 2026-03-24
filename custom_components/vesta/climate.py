@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import yaml
 from collections import deque
 from datetime import datetime, timedelta, date
 from typing import Any
@@ -22,7 +23,6 @@ from homeassistant.const import (
     CONF_NAME,
     UnitOfTemperature,
     STATE_ON,
-    STATE_OFF,
     ATTR_LATITUDE,
     ATTR_LONGITUDE,
 )
@@ -32,7 +32,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.util import location
+from homeassistant.util import dt as dt_util, location
 
 from .const import (
     DOMAIN,
@@ -92,6 +92,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     """The Ultimate Room Controller with Hardware Failure Detection & Frost Guard."""
 
     _attr_has_entity_name = True
+    _attr_translation_key = "smart_climate_pro"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_preset_modes = [MODE_SMART_SCHEDULE, MODE_MANUAL, MODE_AWAY, MODE_VACATION]
@@ -203,8 +204,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._daily_usage_seconds = 0
             self._last_usage_reset_date = today
 
-    async def _async_tick(self, _):
+    async def _async_tick(self, now):
         """Robust Heartbeat with Fail-Safe checks."""
+        # now is a datetime when called by the scheduler, None for manual triggers
+        scheduled = now is not None
+
         # 0. Daily usage reset check
         self._check_daily_reset()
 
@@ -224,6 +228,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if self._cur_temp is None:
             _LOGGER.error("Emergency: Sensor %s is offline!", self._sensor_id)
             heater_on = (datetime.now().minute % 10) == 0  # Minimal pulse
+            if scheduled and heater_on:
+                self._daily_usage_seconds += 60
             await self._set_heaters(heater_on)
             self._update_heating_power(heater_on)
             return
@@ -235,17 +241,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         effective_target = self._compute_effective_target()
 
         # 5. Control Logic
+        # Frost protection is unconditional: overrides hvac_mode=OFF and open windows
         heater_on = False
-        if self._hvac_mode == HVACMode.HEAT:
-            if self._window_open and not frost_risk:
-                heater_on = False
-            else:
-                target = (
-                    effective_target
-                    if not frost_risk
-                    else (ANTI_FROST_TEMP + 1.0)
-                )
-                heater_on = self._cur_temp < (target - 0.2)
+        if frost_risk:
+            heater_on = self._cur_temp < (ANTI_FROST_TEMP + 0.8)
+        elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
+            heater_on = self._cur_temp < (effective_target - 0.2)
+
+        # Count usage only on scheduled ticks, not manual triggers
+        if scheduled and heater_on:
+            self._daily_usage_seconds += 60
         await self._set_heaters(heater_on)
 
         # 6. Update duty cycle
@@ -363,8 +368,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_learning_time = now
 
     async def _set_heaters(self, on: bool):
-        if on:
-            self._daily_usage_seconds += 60
         if self._last_heater_state == on:
             return
         self._last_heater_state = on
@@ -396,6 +399,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return float(self._get_global(CONF_AWAY_TEMP, 15.0))
 
     @property
+    def min_temp(self) -> float:
+        return ANTI_FROST_TEMP
+
+    @property
+    def max_temp(self) -> float:
+        return 35.0
+
+    @property
     def target_temperature(self) -> float:
         """Return the target temperature (pure read-only, no side-effects)."""
         return self._compute_effective_target()
@@ -413,7 +424,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if not config_entry:
             return None
 
-        now = datetime.now()
+        now = dt_util.now()
         day_name = DAY_NAMES[now.weekday()]
         now_time = now.time()
 
@@ -435,7 +446,6 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     if isinstance(raw, dict):
                         return raw
                     try:
-                        import yaml
                         parsed = yaml.safe_load(raw)
                         return parsed if isinstance(parsed, dict) else {}
                     except Exception:
@@ -565,7 +575,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 if self._preset_mode == MODE_AWAY:
                     self._preset_mode = MODE_SMART_SCHEDULE
                 self._force_return = False
-            elif self._preset_mode != MODE_MANUAL:
+            elif self._preset_mode not in (MODE_MANUAL, MODE_VACATION):
                 self._preset_mode = MODE_AWAY
                 self._force_return = False
 
@@ -644,6 +654,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._cur_temp = float(state.state)
                 except ValueError:
                     pass
+
+        # Initialise heater state from reality to avoid a spurious turn_off at startup
+        if self._heaters:
+            self._last_heater_state = any(
+                (s := self.hass.states.get(eid)) is not None and s.state == STATE_ON
+                for eid in self._heaters
+            )
 
         self._last_usage_reset_date = date.today()
 

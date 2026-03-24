@@ -13,6 +13,20 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[str] = ["climate"]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
+# Must match ConfigFlow.VERSION in config_flow.py
+_CURRENT_VERSION = 7
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate config entries from older schema versions to the current one."""
+    _LOGGER.debug(
+        "Migrating Vesta config entry from version %s to %s",
+        config_entry.version,
+        _CURRENT_VERSION,
+    )
+    hass.config_entries.async_update_entry(config_entry, version=_CURRENT_VERSION)
+    return True
+
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Vesta component."""
@@ -26,13 +40,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_GLOBAL:
         hass.data[DOMAIN]["global"] = entry
+        entry.async_on_unload(
+            entry.add_update_listener(_async_global_options_updated)
+        )
         for room in hass.data[DOMAIN]["rooms"]:
             if hasattr(room, "async_write_ha_state"):
                 room.async_write_ha_state()
         return True
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(
+        entry.add_update_listener(_async_room_options_updated)
+    )
     return True
+
+
+async def _async_global_options_updated(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Refresh event listeners on all room entities when global config changes."""
+    for room in hass.data[DOMAIN].get("rooms", []):
+        if hasattr(room, "_setup_listeners"):
+            room._setup_listeners()
+
+
+async def _async_room_options_updated(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Reload a room entry when its config changes so new entities/sensors take effect."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
