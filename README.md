@@ -42,23 +42,26 @@ If the heater has been running at full power for 45 minutes but the room tempera
 - **Schedule integration** — Uses Home Assistant's built-in Schedule helper. Each time block can carry additional data to set a specific temperature or mode directly.
 - **Presence & geofencing** — Uses Person entities. Supports multiple people; the system goes to away mode only when everyone is out, and pre-heats based on the closest person's distance.
 - **Window detection** — Pauses heating when a window is open. Frost protection still activates even with the window open.
-- **Area auto-discovery** — When adding a room, select a Home Assistant area and Vesta automatically finds the heaters, temperature sensor, and window sensor assigned to it.
+- **Area auto-discovery** — When adding a room, select a Home Assistant area and Vesta automatically finds the heaters, temperature sensor, and window sensor assigned to it — including entities that inherit the area from their device.
+- **Native TRV / climate entity support** — For climate entities (TRVs, AC units, etc.) Vesta uses `climate.set_hvac_mode` rather than generic turn on/off, so all integrations are controlled correctly regardless of whether they implement a `turn_on` service.
 
 ---
 
 ## Schedule block additional data
 
-Each block in a Schedule helper can carry a JSON payload in the "Additional data" field. Vesta reads this to determine the target temperature for that block:
+Each block in a Schedule helper can carry data in the "Additional data" field (visible under Advanced settings when editing a block). Enter it in YAML format. Vesta reads the current block's data directly from the schedule entity's state attributes.
 
 | Data | Effect |
 |------|--------|
-| `{"temp": 22.5}` | Hold exactly 22.5°C |
-| `{"mode": "comfort"}` | Use the configured comfort temperature |
-| `{"mode": "eco"}` | Use the eco temperature |
-| `{"mode": "away"}` | Use the away temperature |
-| `{"mode": "frost"}` | Hold at 5°C (anti-frost only) |
-| `{"mode": "off"}` | Turn off heating for this block |
+| `temp: 22.5` | Hold exactly 22.5°C |
+| `mode: comfort` | Use the configured comfort temperature |
+| `mode: eco` | Use the eco temperature |
+| `mode: away` | Use the away temperature |
+| `mode: frost` | Hold at 5°C (anti-frost only) |
+| `mode: "off"` | Turn off heating for this block |
 | *(empty or absent)* | ON block → comfort temp, OFF block → eco temp |
+
+> **Note:** `mode: off` requires quotes (`mode: "off"`) or will be parsed as a boolean by YAML. Both are accepted.
 
 ---
 

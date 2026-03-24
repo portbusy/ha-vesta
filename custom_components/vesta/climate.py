@@ -363,16 +363,37 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_learning_temp = self._cur_temp
         self._last_learning_time = now
 
+    @staticmethod
+    def _heater_active(state) -> bool:
+        """Return True if a heater entity is currently active."""
+        if state is None:
+            return False
+        domain = state.entity_id.split(".")[0]
+        # climate / water_heater: active when not "off" (state is "heat", "auto", etc.)
+        if domain in ("climate", "water_heater"):
+            return state.state not in ("off", "unavailable", "unknown")
+        return state.state == STATE_ON
+
     async def _set_heaters(self, on: bool):
         if self._last_heater_state == on:
             return
         self._last_heater_state = on
         for eid in self._heaters:
-            await self.hass.services.async_call(
-                "homeassistant",
-                "turn_on" if on else "turn_off",
-                {"entity_id": eid},
-            )
+            domain = eid.split(".")[0]
+            if domain == "climate":
+                # homeassistant.turn_on is not implemented by many climate integrations;
+                # climate.set_hvac_mode is the reliable way to turn a TRV/AC on or off.
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_hvac_mode",
+                    {"entity_id": eid, "hvac_mode": "heat" if on else "off"},
+                )
+            else:
+                await self.hass.services.async_call(
+                    "homeassistant",
+                    "turn_on" if on else "turn_off",
+                    {"entity_id": eid},
+                )
 
     # Standard HA Boilerplate & Dynamic Properties
     @property
@@ -633,10 +654,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 except ValueError:
                     pass
 
-        # Initialise heater state from reality to avoid a spurious turn_off at startup
+        # Initialise heater state from reality to avoid a spurious command at startup
         if self._heaters:
             self._last_heater_state = any(
-                (s := self.hass.states.get(eid)) is not None and s.state == STATE_ON
+                self._heater_active(self.hass.states.get(eid))
                 for eid in self._heaters
             )
 
@@ -735,7 +756,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Update internal state if a heater is changed externally."""
         s = event.data.get("new_state")
         if s:
-            self._last_heater_state = s.state == STATE_ON
+            self._last_heater_state = self._heater_active(s)
             self.async_write_ha_state()
 
     @callback

@@ -9,6 +9,7 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import (
     area_registry as ar,
+    device_registry as dr,
     entity_registry as er,
     selector,
 )
@@ -188,9 +189,24 @@ def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
 
     Returns both the default values (entity IDs) and the full option lists
     for SelectSelector so the user only sees entities from the area.
+
+    Checks both the entity's own area_id AND its device's area_id, because
+    most entities inherit the area from their device rather than having it
+    set directly on the entity entry.
     """
-    registry = er.async_get(hass)
-    entities = er.async_entries_for_area(registry, area_id)
+    entity_reg = er.async_get(hass)
+    device_reg = dr.async_get(hass)
+
+    entities = []
+    for entry in entity_reg.entities.values():
+        if entry.disabled:
+            continue
+        if entry.area_id == area_id:
+            entities.append(entry)
+        elif entry.device_id:
+            device = device_reg.async_get(entry.device_id)
+            if device and device.area_id == area_id:
+                entities.append(entry)
 
     heater_options: list[selector.SelectOptionDict] = []
     heater_defaults: list[str] = []
@@ -658,59 +674,137 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(title="", data={})
 
         current = self.config_entry.data
+        area_id = current.get(CONF_AREA)
 
         # Get global data for override defaults
         global_entry = _get_global_entry(self.hass)
         global_data = dict(global_entry.data) if global_entry else {}
 
-        # Build schema — avoid default=None for entity selectors
         schema_dict: dict = {
             vol.Required(
                 CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)
             ): str,
-            vol.Required(
-                CONF_HEATER_ENTITIES,
-                default=current.get(CONF_HEATER_ENTITIES, []),
-            ): selector.EntitySelector(
+        }
+
+        if area_id:
+            # Re-discover area entities so the selector only shows relevant devices
+            d = _discover_entities_for_area(self.hass, area_id)
+            heater_opts = d.get("heater_options", [])
+            temp_opts = d.get("temp_options", [])
+            window_opts = d.get("window_options", [])
+
+            if heater_opts:
+                schema_dict[
+                    vol.Required(
+                        CONF_HEATER_ENTITIES,
+                        default=current.get(CONF_HEATER_ENTITIES, []),
+                    )
+                ] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=heater_opts,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            else:
+                schema_dict[
+                    vol.Required(
+                        CONF_HEATER_ENTITIES,
+                        default=current.get(CONF_HEATER_ENTITIES, []),
+                    )
+                ] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["climate", "switch", "water_heater"], multiple=True
+                    )
+                )
+
+            if temp_opts:
+                schema_dict[
+                    vol.Required(
+                        CONF_SENSOR,
+                        default=current.get(CONF_SENSOR) or temp_opts[0]["value"],
+                    )
+                ] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=temp_opts,
+                        multiple=False,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            else:
+                sensor = current.get(CONF_SENSOR)
+                schema_dict[
+                    vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
+                ] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor", device_class="temperature"
+                    )
+                )
+
+            if window_opts:
+                schema_dict[
+                    vol.Optional(
+                        CONF_WINDOW_SENSOR,
+                        default=current.get(CONF_WINDOW_SENSOR) or window_opts[0]["value"],
+                    )
+                ] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=window_opts,
+                        multiple=False,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            else:
+                window = current.get(CONF_WINDOW_SENSOR)
+                if window:
+                    schema_dict[
+                        vol.Optional(CONF_WINDOW_SENSOR, default=window)
+                    ] = selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="binary_sensor", device_class="window"
+                        )
+                    )
+                else:
+                    schema_dict[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="binary_sensor", device_class="window"
+                        )
+                    )
+        else:
+            # No area stored — fall back to open EntitySelector
+            schema_dict[
+                vol.Required(
+                    CONF_HEATER_ENTITIES,
+                    default=current.get(CONF_HEATER_ENTITIES, []),
+                )
+            ] = selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain=["climate", "switch", "water_heater"], multiple=True
                 )
-            ),
-        }
-
-        sensor = current.get(CONF_SENSOR)
-        if sensor:
+            )
+            sensor = current.get(CONF_SENSOR)
             schema_dict[
-                vol.Required(CONF_SENSOR, default=sensor)
+                vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
             ] = selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain="sensor", device_class="temperature"
                 )
             )
-        else:
-            schema_dict[vol.Required(CONF_SENSOR)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor", device_class="temperature"
-                )
-            )
-
-        window = current.get(CONF_WINDOW_SENSOR)
-        if window:
-            schema_dict[
-                vol.Optional(CONF_WINDOW_SENSOR, default=window)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="binary_sensor", device_class="window"
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_WINDOW_SENSOR)] = (
-                selector.EntitySelector(
+            window = current.get(CONF_WINDOW_SENSOR)
+            if window:
+                schema_dict[
+                    vol.Optional(CONF_WINDOW_SENSOR, default=window)
+                ] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="binary_sensor", device_class="window"
                     )
                 )
-            )
+            else:
+                schema_dict[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor", device_class="window"
+                    )
+                )
 
         # Pass both room-level overrides and global data as fallback
         schema_dict[vol.Required("overrides")] = _overrides_schema(
