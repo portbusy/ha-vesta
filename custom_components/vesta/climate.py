@@ -25,7 +25,6 @@ from homeassistant.const import (
     STATE_ON,
     ATTR_LATITUDE,
     ATTR_LONGITUDE,
-    WEEKDAYS,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
@@ -66,8 +65,8 @@ from .const import (
     ATTR_OUTDOOR_TEMP,
 )
 
-# WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] — imported from homeassistant.const
-# matches the keys used by HA's Schedule helper in its config entry options
+# HA Schedule helper stores days under full lowercase names (mirrors WEEKDAY_TO_CONF in schedule/const.py)
+_SCHED_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -427,7 +426,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return None
 
         now = dt_util.now()
-        day_name = WEEKDAYS[now.weekday()]
+        day_name = _SCHED_WEEKDAYS[now.weekday()]
         now_time = now.time()
 
         schedule_data = {**config_entry.data, **config_entry.options}
@@ -435,24 +434,30 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         for slot in day_slots:
             try:
-                from_time = datetime.strptime(
-                    slot.get("from", "00:00:00")[:5], "%H:%M"
-                ).time()
-                to_time = datetime.strptime(
-                    slot.get("to", "00:00:00")[:5], "%H:%M"
-                ).time()
+                from_str = slot.get("from", "00:00:00")
+                to_str = slot.get("to", "00:00:00")
+                from_time = datetime.strptime(from_str[:5], "%H:%M").time()
+                # HA stores midnight-end as "24:00:00" which strptime rejects
+                if str(to_str).startswith("24"):
+                    from datetime import time as dt_time
+                    to_time = dt_time.max
+                else:
+                    to_time = datetime.strptime(str(to_str)[:5], "%H:%M").time()
                 if from_time <= now_time < to_time:
                     raw = slot.get("data")
                     if not raw:
                         return {}
                     if isinstance(raw, dict):
+                        # HA already parsed the YAML; normalise boolean mode values
+                        # (unquoted 'off'/'on' in YAML become Python booleans)
+                        if isinstance(raw.get("mode"), bool):
+                            raw = dict(raw)
+                            raw["mode"] = "off" if not raw["mode"] else "on"
                         return raw
                     try:
                         parsed = yaml.safe_load(raw)
                         if not isinstance(parsed, dict):
                             return {}
-                        # YAML parses unquoted 'off'/'on' as booleans — normalise
-                        # so that 'mode: off' works the same as 'mode: "off"'
                         if isinstance(parsed.get("mode"), bool):
                             parsed["mode"] = "off" if not parsed["mode"] else "on"
                         return parsed
