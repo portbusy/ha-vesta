@@ -118,6 +118,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._vacation_active = False
         self._force_return = False
         self._nearest_distance = 0.0
+        self._last_nearest_distance = 0.0
 
         # Duty cycle tracking
         self._duty_history: deque[bool] = deque(maxlen=DUTY_CYCLE_WINDOW)
@@ -284,13 +285,32 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self.async_write_ha_state()
 
     def _update_force_return(self) -> None:
-        """Set _force_return if pre-heating should start for imminent arrival.
+        """Re-evaluate pre-heating on every tick.
 
         Called only from _async_tick so state mutation stays out of properties.
+
+        Pre-heating is only activated when the person is actively approaching
+        home (distance decreasing by more than GPS noise) AND the estimated
+        travel time is shorter than the time needed to heat the room. This
+        prevents false triggers when the person is stationary near home (e.g.
+        at the office, visiting a friend, or at the supermarket).
         """
-        if self._preset_mode != MODE_AWAY or self._force_return or self._cur_temp is None:
+        if self._preset_mode != MODE_AWAY or self._cur_temp is None:
+            # Keep _last_nearest_distance in sync so the first away tick has
+            # an accurate baseline and doesn't falsely detect an approach.
+            self._last_nearest_distance = self._nearest_distance
+            self._force_return = False
             return
-        base = self._target_temp or self.comfort_temp
+
+        # 500 m threshold filters out GPS noise between ticks
+        approaching = self._nearest_distance < (self._last_nearest_distance - 500)
+        self._last_nearest_distance = self._nearest_distance
+
+        if not approaching:
+            self._force_return = False
+            return
+
+        base = self.comfort_temp
         if self._outdoor_temp is not None and self._outdoor_temp < 5:
             base += (5 - self._outdoor_temp) * 0.1
         avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)
@@ -299,8 +319,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         temp_deficit = base - self._cur_temp
         if temp_deficit > 0:
             heat_time_min = temp_deficit / h_rate
-            if travel_time_min <= heat_time_min:
-                self._force_return = True
+            self._force_return = travel_time_min <= heat_time_min
+        else:
+            self._force_return = False
 
     def _compute_effective_target(self) -> float:
         """Compute the effective target temperature (pure, no side-effects)."""

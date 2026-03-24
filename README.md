@@ -17,8 +17,8 @@ Every minute, Vesta evaluates each room and decides whether to turn the heater o
 
 1. **Frost protection** — If the room drops below 5°C, heating is forced on regardless of schedule, mode, or open windows. This cannot be disabled.
 2. **Vacation mode** — All rooms hold at anti-frost temperature (5°C). Activatable globally or per-room.
-3. **Away mode** — When everyone is away, rooms drop to a lower "away" temperature to save energy.
-4. **Pre-heating on return** — When you're heading home, Vesta calculates how long it takes to heat the room vs. how long until you arrive, and starts heating early so the room is ready when you walk in.
+3. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
+4. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
 5. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
 6. **Manual override** — You can set any temperature directly. Vesta holds it for 4 hours, then returns to the schedule automatically.
 
