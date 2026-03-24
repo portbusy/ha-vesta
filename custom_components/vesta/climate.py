@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import time
-import yaml
 from collections import deque
 from datetime import datetime, timedelta, date
 from typing import Any
@@ -17,7 +16,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers import entity_registry as er
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     CONF_NAME,
@@ -64,9 +62,6 @@ from .const import (
     ATTR_VACATION_MODE,
     ATTR_OUTDOOR_TEMP,
 )
-
-# HA Schedule helper stores days under full lowercase names (mirrors WEEKDAY_TO_CONF in schedule/const.py)
-_SCHED_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -412,61 +407,31 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Return the target temperature (pure read-only, no side-effects)."""
         return self._compute_effective_target()
 
-    def _get_current_schedule_block_data(self, schedule_entity_id: str) -> dict | None:
-        """Legge i dati aggiuntivi del blocco attualmente attivo nello schedule HA."""
-        entity_reg = er.async_get(self.hass)
-        entity_entry = entity_reg.async_get(schedule_entity_id)
-        if not entity_entry or not entity_entry.config_entry_id:
-            return None
+    # HA Schedule entity built-in attributes — not part of block additional data
+    _SCHED_HA_ATTRS = frozenset(
+        {"next_event", "editable", "icon", "friendly_name", "restored"}
+    )
 
-        config_entry = self.hass.config_entries.async_get_entry(
-            entity_entry.config_entry_id
-        )
-        if not config_entry:
-            return None
+    def _get_current_schedule_block_data(self, schedule_entity_id: str) -> dict:
+        """Return additional data for the currently active schedule block.
 
-        now = dt_util.now()
-        day_name = _SCHED_WEEKDAYS[now.weekday()]
-        now_time = now.time()
-
-        schedule_data = {**config_entry.data, **config_entry.options}
-        day_slots = schedule_data.get(day_name, [])
-
-        for slot in day_slots:
-            try:
-                from_str = slot.get("from", "00:00:00")
-                to_str = slot.get("to", "00:00:00")
-                from_time = datetime.strptime(from_str[:5], "%H:%M").time()
-                # HA stores midnight-end as "24:00:00" which strptime rejects
-                if str(to_str).startswith("24"):
-                    from datetime import time as dt_time
-                    to_time = dt_time.max
-                else:
-                    to_time = datetime.strptime(str(to_str)[:5], "%H:%M").time()
-                if from_time <= now_time < to_time:
-                    raw = slot.get("data")
-                    if not raw:
-                        return {}
-                    if isinstance(raw, dict):
-                        # HA already parsed the YAML; normalise boolean mode values
-                        # (unquoted 'off'/'on' in YAML become Python booleans)
-                        if isinstance(raw.get("mode"), bool):
-                            raw = dict(raw)
-                            raw["mode"] = "off" if not raw["mode"] else "on"
-                        return raw
-                    try:
-                        parsed = yaml.safe_load(raw)
-                        if not isinstance(parsed, dict):
-                            return {}
-                        if isinstance(parsed.get("mode"), bool):
-                            parsed["mode"] = "off" if not parsed["mode"] else "on"
-                        return parsed
-                    except Exception:
-                        return {}
-            except (ValueError, TypeError):
-                continue
-
-        return None
+        HA exposes the current block's additional data directly as state
+        attributes on the schedule entity (alongside next_event, editable,
+        friendly_name). We just filter out the built-in HA attributes.
+        """
+        state = self.hass.states.get(schedule_entity_id)
+        if not state:
+            return {}
+        block_data = {
+            k: v
+            for k, v in state.attributes.items()
+            if k not in self._SCHED_HA_ATTRS
+        }
+        # Normalise boolean mode values: unquoted 'off'/'on' in YAML are stored
+        # as Python booleans by HA; map them back to strings.
+        if isinstance(block_data.get("mode"), bool):
+            block_data["mode"] = "off" if not block_data["mode"] else "on"
+        return block_data
 
     def _parse_schedule_block_data(self, block_data: dict | None) -> float | None:
         """Estrae la temperatura dai dati aggiuntivi del blocco.
