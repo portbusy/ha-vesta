@@ -124,7 +124,7 @@ class VestaSavingsSensor(SensorEntity):
     ) -> None:
         self._climate = climate
         self._key = key
-        self._attr_name = name
+        self._attr_translation_key = key
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._attr_icon = icon
