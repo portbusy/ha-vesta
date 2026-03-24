@@ -134,7 +134,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_usage_reset_date: date | None = None
 
         # Safety & Fail-safe state
-        self._last_heater_state: bool | None = None
+        self._last_heater_state: bool | None = None   # switch/water_heater bang-bang
+        self._last_climate_active: bool | None = None  # climate entity setpoint mode
+        self._last_target_temp: float | None = None
         self._manual_start_time: float | None = None
         self._hardware_failure = False
         self._stuck_check_time: float | None = None
@@ -226,7 +228,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             heater_on = (dt_util.now().minute % 10) == 0  # Minimal pulse
             if scheduled and heater_on:
                 self._daily_usage_seconds += 60
-            await self._set_heaters(heater_on)
+            await self._set_heaters(
+                switch_on=heater_on,
+                climate_active=heater_on,
+                target_temp=ANTI_FROST_TEMP if heater_on else None,
+            )
             self._update_heating_power(heater_on)
             return
 
@@ -238,19 +244,30 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # 5. Control Logic
         # Frost protection is unconditional: overrides hvac_mode=OFF and open windows
-        heater_on = False
-        if frost_risk:
-            heater_on = self._cur_temp < (ANTI_FROST_TEMP + 0.8)
-        elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
-            heater_on = self._cur_temp < (effective_target - 0.2)
+        target = ANTI_FROST_TEMP if frost_risk else effective_target
 
-        # Count usage only on scheduled ticks, not manual triggers
-        if scheduled and heater_on:
+        # Climate entities (TRVs/AC): setpoint mode — Vesta decides whether heating
+        # should be active and sends the target temperature; the device manages its
+        # own valve/compressor internally.
+        climate_active = frost_risk or (
+            self._hvac_mode == HVACMode.HEAT and not self._window_open
+        )
+
+        # Switches and other simple heaters: bang-bang control — Vesta acts as the
+        # thermostat and decides when to turn the device on or off.
+        switch_on = False
+        if frost_risk:
+            switch_on = self._cur_temp < (ANTI_FROST_TEMP + 0.8)
+        elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
+            switch_on = self._cur_temp < (effective_target - 0.2)
+
+        # Count usage on scheduled ticks (use switch_on as the "actively heating" proxy)
+        if scheduled and switch_on:
             self._daily_usage_seconds += 60
-        await self._set_heaters(heater_on)
+        await self._set_heaters(switch_on=switch_on, climate_active=climate_active, target_temp=target)
 
         # 6. Update duty cycle
-        self._update_heating_power(heater_on)
+        self._update_heating_power(switch_on)
 
         # 7. Hardware Failure Detection
         self._check_hardware_performance()
@@ -374,26 +391,62 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return state.state not in ("off", "unavailable", "unknown")
         return state.state == STATE_ON
 
-    async def _set_heaters(self, on: bool):
-        if self._last_heater_state == on:
+    async def _set_heaters(
+        self,
+        switch_on: bool,
+        climate_active: bool,
+        target_temp: float | None = None,
+    ):
+        # --- Idempotence checks ---
+        switch_state_changed = self._last_heater_state != switch_on
+        climate_state_changed = self._last_climate_active != climate_active
+        climate_target_changed = (
+            climate_active
+            and target_temp is not None
+            and target_temp != self._last_target_temp
+        )
+
+        if not switch_state_changed and not climate_state_changed and not climate_target_changed:
             return
-        self._last_heater_state = on
+
+        # Update trackers before issuing commands
+        if switch_state_changed:
+            self._last_heater_state = switch_on
+        if climate_state_changed:
+            self._last_climate_active = climate_active
+        if not climate_active:
+            self._last_target_temp = None
+        elif target_temp is not None:
+            self._last_target_temp = target_temp
+
         for eid in self._heaters:
             domain = eid.split(".")[0]
             if domain == "climate":
-                # homeassistant.turn_on is not implemented by many climate integrations;
-                # climate.set_hvac_mode is the reliable way to turn a TRV/AC on or off.
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_hvac_mode",
-                    {"entity_id": eid, "hvac_mode": "heat" if on else "off"},
-                )
+                # Setpoint mode: keep in heat mode while heating is desired and let
+                # the TRV/AC manage its valve internally. Only turn off when Vesta
+                # explicitly wants no heating (vacation, schedule off, window open…).
+                if climate_state_changed:
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_hvac_mode",
+                        {"entity_id": eid, "hvac_mode": "heat" if climate_active else "off"},
+                    )
+                if climate_active and target_temp is not None and (
+                    climate_state_changed or climate_target_changed
+                ):
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_temperature",
+                        {"entity_id": eid, "temperature": target_temp},
+                    )
             else:
-                await self.hass.services.async_call(
-                    "homeassistant",
-                    "turn_on" if on else "turn_off",
-                    {"entity_id": eid},
-                )
+                # Bang-bang for switches and other simple heaters
+                if switch_state_changed:
+                    await self.hass.services.async_call(
+                        "homeassistant",
+                        "turn_on" if switch_on else "turn_off",
+                        {"entity_id": eid},
+                    )
 
     # Standard HA Boilerplate & Dynamic Properties
     @property
@@ -659,6 +712,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._last_heater_state = any(
                 self._heater_active(self.hass.states.get(eid))
                 for eid in self._heaters
+                if eid.split(".")[0] != "climate"
+            )
+            self._last_climate_active = any(
+                self._heater_active(self.hass.states.get(eid))
+                for eid in self._heaters
+                if eid.split(".")[0] == "climate"
             )
 
         self._last_usage_reset_date = dt_util.now().date()
@@ -756,7 +815,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Update internal state if a heater is changed externally."""
         s = event.data.get("new_state")
         if s:
-            self._last_heater_state = self._heater_active(s)
+            domain = s.entity_id.split(".")[0]
+            if domain == "climate":
+                self._last_climate_active = self._heater_active(s)
+            else:
+                self._last_heater_state = self._heater_active(s)
             self.async_write_ha_state()
 
     @callback
