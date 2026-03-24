@@ -447,7 +447,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         return raw
                     try:
                         parsed = yaml.safe_load(raw)
-                        return parsed if isinstance(parsed, dict) else {}
+                        if not isinstance(parsed, dict):
+                            return {}
+                        # YAML parses unquoted 'off'/'on' as booleans — normalise
+                        # so that 'mode: off' works the same as 'mode: "off"'
+                        if isinstance(parsed.get("mode"), bool):
+                            parsed["mode"] = "off" if not parsed["mode"] else "on"
+                        return parsed
                     except Exception:
                         return {}
             except (ValueError, TypeError):
@@ -717,6 +723,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self.hass, [weather_id], self._on_weather
                 )
             )
+
+        sched_id = (
+            self._entry.data.get(CONF_SCHEDULE)
+            if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
+            else (g.data.get(CONF_SCHEDULE) if g else None)
+        )
+        if sched_id:
+            self._event_listeners.append(
+                async_track_state_change_event(
+                    self.hass, [sched_id], self._on_schedule
+                )
+            )
+
+    @callback
+    def _on_schedule(self, event):
+        """React immediately when the schedule entity changes state (ON/OFF)."""
+        self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_heater_change(self, event):
