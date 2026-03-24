@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
+    HVACAction,
     HVACMode,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -896,6 +897,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @property
     def hvac_mode(self) -> HVACMode:
         return self._hvac_mode
+
+    @property
+    def hvac_action(self) -> HVACAction:
+        if self._hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+        if self._last_climate_active or self._last_heater_state:
+            return HVACAction.HEATING
+        return HVACAction.IDLE
 
     @property
     def preset_mode(self) -> str | None:

@@ -222,12 +222,14 @@ def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
         if domain in ("climate", "switch", "water_heater"):
             heater_ids.append(entry.entity_id)
 
-        if domain == "sensor" and entry.device_class == "temperature":
+        # device_class stores only manual overrides; fall back to original_device_class
+        effective_dc = entry.device_class or entry.original_device_class
+        if domain == "sensor" and effective_dc == "temperature":
             temp_ids.append(entry.entity_id)
             if temp_default is None:
                 temp_default = entry.entity_id
 
-        if domain == "binary_sensor" and entry.device_class == "window":
+        if domain == "binary_sensor" and effective_dc == "window":
             window_ids.append(entry.entity_id)
             if window_default is None:
                 window_default = entry.entity_id
