@@ -318,9 +318,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             base += (5 - self._outdoor_temp) * 0.1
 
         if self._preset_mode == MODE_AWAY:
-            return (
-                self.away_temp if self._nearest_distance > 15000 else self.eco_temp
-            )
+            return self.away_temp
         return base
 
     def _check_hardware_performance(self):
@@ -568,27 +566,34 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 else g.data.get(CONF_SCHEDULE)
             )
             if sched_id and (s_state := self.hass.states.get(sched_id)):
-                block_data = self._get_current_schedule_block_data(sched_id)
-
-                # Controlla se il blocco richiede spegnimento
-                mode = str((block_data or {}).get("mode", "")).lower().strip()
-                if mode == "off":
-                    self._hvac_mode = HVACMode.OFF
-                else:
-                    # Riattiva se era stato spento dallo schedule
-                    if self._hvac_mode == HVACMode.OFF and self._preset_mode != MODE_MANUAL:
+                if self._preset_mode == MODE_AWAY:
+                    # In away mode the schedule cannot override temperature or turn
+                    # off heating. Restore hvac_mode if a previous schedule block
+                    # had turned it off.
+                    if self._hvac_mode == HVACMode.OFF:
                         self._hvac_mode = HVACMode.HEAT
+                else:
+                    block_data = self._get_current_schedule_block_data(sched_id)
 
-                    parsed_temp = self._parse_schedule_block_data(block_data)
-                    if parsed_temp is not None:
-                        self._target_temp = parsed_temp
+                    # Controlla se il blocco richiede spegnimento
+                    mode = str((block_data or {}).get("mode", "")).lower().strip()
+                    if mode == "off":
+                        self._hvac_mode = HVACMode.OFF
                     else:
-                        # Fallback classico: on = comfort, off = eco
-                        self._target_temp = (
-                            self.comfort_temp
-                            if s_state.state == STATE_ON
-                            else self.eco_temp
-                        )
+                        # Riattiva se era stato spento dallo schedule
+                        if self._hvac_mode == HVACMode.OFF:
+                            self._hvac_mode = HVACMode.HEAT
+
+                        parsed_temp = self._parse_schedule_block_data(block_data)
+                        if parsed_temp is not None:
+                            self._target_temp = parsed_temp
+                        else:
+                            # Fallback classico: on = comfort, off = eco
+                            self._target_temp = (
+                                self.comfort_temp
+                                if s_state.state == STATE_ON
+                                else self.eco_temp
+                            )
 
         # 3. Presence & Geofencing
         presence_ids = (
