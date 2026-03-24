@@ -25,6 +25,7 @@ from homeassistant.const import (
     STATE_ON,
     ATTR_LATITUDE,
     ATTR_LONGITUDE,
+    WEEKDAYS,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
@@ -65,7 +66,8 @@ from .const import (
     ATTR_OUTDOOR_TEMP,
 )
 
-DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+# WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] — imported from homeassistant.const
+# matches the keys used by HA's Schedule helper in its config entry options
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -425,7 +427,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return None
 
         now = dt_util.now()
-        day_name = DAY_NAMES[now.weekday()]
+        day_name = WEEKDAYS[now.weekday()]
         now_time = now.time()
 
         schedule_data = {**config_entry.data, **config_entry.options}
