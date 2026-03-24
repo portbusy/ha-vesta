@@ -13,6 +13,38 @@
           }
         }
       }
+    },
+    "sensor": {
+      "heating_minutes_today": {
+        "name": "Minuti di Riscaldamento Oggi"
+      },
+      "saved_away_hours_today": {
+        "name": "Ore Risparmiate Fuori Casa (Oggi)"
+      },
+      "saved_window_hours_today": {
+        "name": "Ore Risparmiate Finestra Aperta (Oggi)"
+      },
+      "saved_eco_hours_today": {
+        "name": "Ore in Modalità Eco (Oggi)"
+      },
+      "heating_hours_month": {
+        "name": "Ore di Riscaldamento (Mese)"
+      },
+      "saved_away_hours_month": {
+        "name": "Ore Risparmiate Fuori Casa (Mese)"
+      },
+      "saved_window_hours_month": {
+        "name": "Ore Risparmiate Finestra Aperta (Mese)"
+      },
+      "saved_eco_hours_month": {
+        "name": "Ore in Modalità Eco (Mese)"
+      },
+      "savings_kwh_month": {
+        "name": "Risparmio Stimato kWh (Mese)"
+      },
+      "savings_eur_month": {
+        "name": "Risparmio Stimato EUR (Mese)"
+      }
     }
   },
   "config": {
@@ -36,7 +68,9 @@
           "schedule_entity": "Programmazione Riscaldamento",
           "weather_entity": "Fornitore Meteo",
           "override_switch": "Interruttore Override Manuale",
-          "vacation_state": "Modalità Vacanza"
+          "vacation_state": "Modalità Vacanza",
+          "energy_price_kwh": "Prezzo Energia (€/kWh)",
+          "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
         },
         "data_description": {
           "comfort_temp": "Temperatura target quando qualcuno è a casa e la programmazione è attiva.",
@@ -47,7 +81,9 @@
           "schedule_entity": "Un helper Programmazione che controlla quando applicare la temperatura comfort o eco. ON = comfort, OFF = eco.",
           "weather_entity": "Usato per la compensazione meteo: aumenta il riscaldamento quando fa molto freddo fuori.",
           "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo.",
-          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C)."
+          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C).",
+          "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
+          "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Usata per stimare kWh e costo risparmiati per stanza. Aggiornabile ogni anno."
         }
       },
       "area": {
@@ -126,7 +162,9 @@
           "schedule_entity": "Programmazione Riscaldamento",
           "weather_entity": "Fornitore Meteo",
           "override_switch": "Interruttore Override Manuale",
-          "vacation_state": "Modalità Vacanza"
+          "vacation_state": "Modalità Vacanza",
+          "energy_price_kwh": "Prezzo Energia (€/kWh)",
+          "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
         },
         "data_description": {
           "comfort_temp": "Temperatura target quando qualcuno è a casa e la programmazione è attiva.",
@@ -137,7 +175,9 @@
           "schedule_entity": "Helper Programmazione: ON = comfort, OFF = eco.",
           "weather_entity": "Usato per la compensazione meteo quando fa molto freddo fuori.",
           "override_switch": "Un input_boolean o switch che forza tutti i riscaldatori al massimo quando attivo.",
-          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C)."
+          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C).",
+          "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
+          "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Aggiornabile ogni anno."
         }
       },
       "room": {
