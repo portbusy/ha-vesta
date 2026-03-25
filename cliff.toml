@@ -1,0 +1,31 @@
+[changelog]
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}\
+### {{ group }}
+{% for commit in commits %}\
+- {{ commit.message | upper_first }} \
+([`{{ commit.id | truncate(length=7, end="") }}`]\
+(https://github.com/portbusy/ha-vesta/commit/{{ commit.id }}))
+{% endfor %}
+{% endfor %}\
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+  { message = "^feat", group = "🚀 New Features" },
+  { message = "^fix", group = "🐛 Bug Fixes" },
+  { message = "^refactor", group = "🔧 Improvements" },
+  { message = "^doc", group = "📖 Documentation" },
+  { message = "^chore: bump", skip = true },
+  { message = "^chore", group = "🔩 Other Changes" },
+]
+filter_commits = true
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "oldest"
