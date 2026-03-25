@@ -150,7 +150,7 @@ To enable the kWh/€ estimate, open **Global Home Settings** and fill in:
 - **Energy price (€/kWh)** — your current electricity rate
 - **Annual consumption (kWh)** — your home's total annual heating consumption for the current year
 
-Vesta uses these figures alongside the Fraunhofer Institute methodology (the same approach used by Tado) to estimate savings. The estimate is proportional to the temperature differential saved per feature: away savings are larger when the difference between comfort and away temperature is greater relative to the outdoor temperature.
+Vesta uses the **Heating Degree Hours (HDH)** method to estimate savings. At every scheduled tick, it accumulates the ratio of temperature setpoint reduction to the current heating demand `(comfort - actual_setpoint) / (comfort - outdoor_temp)` — so each hour of away mode on a cold night contributes more than the same hour on a mild day. When outdoor temperature is unavailable, Vesta falls back to Fraunhofer Institute reference factors (the same methodology used by Tado). The estimate is proportional to the temperature differential saved per feature: away savings are larger when the difference between comfort and away temperature is greater relative to the outdoor temperature.
 
 ---
 
