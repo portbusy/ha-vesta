@@ -1,0 +1,47 @@
+name: Feature Request
+description: Suggest a new feature or improvement for Vesta
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make Vesta better? Describe it below.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Is this related to a limitation or frustration with the current behaviour? Describe the context.
+      placeholder: "e.g. I have multiple rooms that I always want to set to vacation mode at once, but I have to change each one manually."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the feature you'd like to see. How should it work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Have you found any workarounds or alternative approaches?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Temperature control logic
+        - Presence / geofencing
+        - Scheduling
+        - Vacation / away mode
+        - Energy tracking / savings
+        - Config flow / UI
+        - Sensors / attributes
+        - Other
+    validations:
+      required: true

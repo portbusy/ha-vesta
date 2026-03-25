@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Home Assistant Community
+    url: https://community.home-assistant.io
+    about: Ask questions and get help from the HA community
+  - name: Documentation
+    url: https://github.com/portbusy/ha-vesta/blob/main/README.md
+    about: Read the Vesta documentation before opening an issue
