@@ -5,9 +5,9 @@
         "state_attributes": {
           "preset_mode": {
             "state": {
-              "smart_schedule": "Programmazione",
+              "smart_schedule": "Auto",
               "manual": "Manuale",
-              "away": "Fuori Casa",
+              "away": "Assente",
               "vacation": "Vacanza"
             }
           }
