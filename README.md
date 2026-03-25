@@ -15,12 +15,13 @@ Think of it as the brains Tado and similar systems provide, but running entirely
 
 Every minute, Vesta evaluates each room and decides whether to turn the heater on or off. The decision is based on a layered priority system:
 
-1. **Frost protection** — If the room drops below 5°C, heating is forced on regardless of schedule, mode, or open windows. This cannot be disabled.
-2. **Vacation mode** — All rooms hold at anti-frost temperature (5°C). Activatable globally or per-room.
-3. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
-4. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
-5. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
-6. **Manual override** — You can set any temperature directly. Vesta holds it for 4 hours, then returns to the schedule automatically.
+1. **Emergency heat override** — When a designated switch or input_boolean is turned on, all heaters are forced to maximum output immediately, ignoring mode, schedule, and window state. Intended for emergency cold situations.
+2. **Frost protection** — If the room drops below 5°C, heating is forced on regardless of schedule, mode, or open windows. This cannot be disabled.
+3. **Vacation mode** — All rooms hold at anti-frost temperature (5°C). Can be activated via a static toggle in Global Settings or by linking a dynamic entity (input_boolean or binary_sensor) that you control from automations or the dashboard.
+4. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
+5. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
+6. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
+7. **Manual override** — You can set any temperature directly. Vesta holds it for 4 hours, then returns to the schedule automatically.
 
 ### Thermal learning
 
@@ -42,8 +43,11 @@ If the heater has been running at full power for 45 minutes but the room tempera
 - **Schedule integration** — Uses Home Assistant's built-in Schedule helper. Each time block can carry additional data to set a specific temperature or mode directly.
 - **Presence & geofencing** — Uses Person entities. Supports multiple people; the system goes to away mode only when everyone is out, and pre-heats based on the closest person's distance.
 - **Window detection** — Pauses heating when a window is open. Frost protection still activates even with the window open.
-- **Area auto-discovery** — When adding a room, select a Home Assistant area and Vesta automatically finds the heaters, temperature sensor, and window sensor assigned to it — including entities that inherit the area from their device.
-- **Native TRV / climate entity support** — For climate entities (TRVs, AC units, etc.) Vesta uses `climate.set_hvac_mode` rather than generic turn on/off, so all integrations are controlled correctly regardless of whether they implement a `turn_on` service.
+- **Area auto-discovery** — When adding a room, select a Home Assistant area and Vesta automatically finds the heaters, temperature sensors, and window sensor assigned to it — including entities that inherit the area from their device.
+- **Multiple temperature sensors** — Each room can use more than one temperature sensor. Readings are averaged automatically; offline sensors are excluded. If all configured sensors go offline, Vesta falls back to the TRV's own internal sensor to keep the room controlled.
+- **Native TRV / climate entity support** — For climate entities (TRVs, AC units, etc.) Vesta uses `climate.set_hvac_mode` rather than generic turn on/off, so all integrations are controlled correctly regardless of whether they implement a `turn_on` service. Vesta also reads the TRV's internal temperature sensor to estimate valve openness and improve heating power calculations.
+- **Vacation mode entity** — Link any input_boolean or binary_sensor to control vacation mode dynamically from automations or the dashboard. When the entity is ON, all rooms drop to anti-frost temperature. A static fallback toggle is also available for manual use.
+- **Emergency heat override** — Link a switch or input_boolean to instantly force all heaters to maximum output across every room. Useful for emergency cold situations or when you need rapid heating regardless of any other setting.
 - **Energy savings tracking** — Each room exposes dedicated sensor entities for heating time and hours saved per feature (away mode, window detection, eco schedule). When energy consumption and price are configured in Global Settings, Vesta also estimates monthly kWh and cost savings.
 
 ---
@@ -98,10 +102,18 @@ Each block in a Schedule helper can carry data in the "Additional data" field (v
 
 1. Go to **Settings > Devices & Services**.
 2. Click **Add Integration** and search for **Vesta**.
-3. The first time, configure **Global Home Settings** — comfort, eco, and away temperatures, your presence sensors, schedule, and weather entity.
-4. Then add each **Room** individually. Select the area to auto-discover entities, or configure them manually.
+3. The first time, configure **Global Home Settings** — comfort, eco, and away temperatures, your presence sensors, schedule, weather entity, and optionally a vacation mode entity and/or an emergency heat override switch.
+4. Then add each **Room** individually. Select the area to auto-discover entities, or configure them manually. You can select multiple temperature sensors per room.
 
 Global settings apply to all rooms by default. When editing a room, you can override any setting (schedule, presence sensors, comfort temperature, away temperature) specifically for that room.
+
+**Global-only settings:**
+
+| Setting | Description |
+|---------|-------------|
+| Vacation Mode Entity | An input_boolean or binary_sensor. When ON, all rooms drop to 5°C. Takes priority over the static toggle. |
+| Vacation Mode (static fallback) | A simple toggle to activate vacation mode when no entity is configured. |
+| Emergency Heat Override | A switch or input_boolean. When ON, all heaters are forced to maximum output immediately. |
 
 ---
 
