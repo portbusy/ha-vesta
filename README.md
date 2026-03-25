@@ -11,6 +11,22 @@ Think of it as the brains Tado and similar systems provide, but running entirely
 
 ---
 
+## Table of contents
+
+- [How it works](#how-it-works)
+  - [Thermal learning](#thermal-learning)
+  - [Weather compensation](#weather-compensation)
+  - [Hardware failure detection](#hardware-failure-detection)
+- [Features](#features)
+- [Schedule block additional data](#schedule-block-additional-data)
+- [Preset modes](#preset-modes)
+- [Manual override revert modes](#manual-override-revert-modes)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Energy savings tracking](#energy-savings-tracking)
+
+---
+
 ## How it works
 
 Every minute, Vesta evaluates each room and decides whether to turn the heater on or off. The decision is based on a layered priority system:
