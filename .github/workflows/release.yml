@@ -32,14 +32,13 @@ jobs:
           git diff --cached --quiet || git commit -m "chore: bump version to ${GITHUB_REF_NAME#v}"
           git push origin HEAD:main || true
 
-      - name: Generate release notes
-        uses: orhun/git-cliff-action@v3
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
         with:
-          config: cliff.toml
-          args: --latest --strip header
-        env:
-          OUTPUT: RELEASE_NOTES.md
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tool: git-cliff
+
+      - name: Generate release notes
+        run: git-cliff --config cliff.toml --latest --strip header -o RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
