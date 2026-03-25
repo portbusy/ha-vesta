@@ -182,7 +182,9 @@
           "boiler_entity": "Boiler Entity",
           "boiler_offset": "Boiler Flow Temperature Offset",
           "energy_price_kwh": "Energy Price (€/kWh)",
-          "energy_kwh_this_year": "Annual Heating Consumption (kWh)"
+          "energy_kwh_this_year": "Annual Heating Consumption (kWh)",
+          "manual_override_mode": "Manual Override Revert Mode",
+          "manual_override_hours": "Manual Override Timer Duration"
         },
         "data_description": {
           "comfort_temp": "Target temperature when someone is home and the schedule is active.",
