@@ -22,12 +22,15 @@ from .const import (
     CONF_HEATER_ENTITIES,
     CONF_SENSOR,
     CONF_WINDOW_SENSOR,
+    CONF_WINDOW_DELAY,
     CONF_PRESENCE_SENSORS,
     CONF_SCHEDULE,
     CONF_WEATHER,
     CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
     CONF_VACATION_ENTITY,
+    CONF_BOILER_ENTITY,
+    CONF_BOILER_OFFSET,
     CONF_NAME,
     CONF_AREA,
     CONF_COMFORT_TEMP,
@@ -375,6 +378,22 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(
                         CONF_VACATION_STATE, default=False
                     ): selector.BooleanSelector(),
+                    vol.Optional(CONF_BOILER_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["climate", "switch", "input_boolean"]
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_BOILER_OFFSET, default=5.0
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=20,
+                            step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
                     vol.Optional(CONF_ENERGY_PRICE_KWH): selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0.01, max=2.0, step=0.01,
@@ -527,6 +546,16 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 )
             )
+
+        schema[vol.Optional(CONF_WINDOW_DELAY, default=0)] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=30,
+                step=1,
+                unit_of_measurement="min",
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
 
         # Overrides section — pass global data so entity selectors show global defaults
         schema[vol.Required("overrides")] = _overrides_schema(
@@ -687,6 +716,37 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_VACATION_STATE, False),
             )
         ] = selector.BooleanSelector()
+
+        boiler = current.get(CONF_BOILER_ENTITY)
+        if boiler:
+            schema_dict[
+                vol.Optional(CONF_BOILER_ENTITY, default=boiler)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["climate", "switch", "input_boolean"]
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_BOILER_ENTITY)] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["climate", "switch", "input_boolean"]
+                )
+            )
+
+        schema_dict[
+            vol.Optional(
+                CONF_BOILER_OFFSET,
+                default=float(current.get(CONF_BOILER_OFFSET, 5.0)),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=20,
+                step=0.5,
+                unit_of_measurement="°C",
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
 
         # --- Optional energy data for savings estimate ---
         import datetime
@@ -892,6 +952,21 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                         domain="binary_sensor", device_class="window"
                     )
                 )
+
+        schema_dict[
+            vol.Optional(
+                CONF_WINDOW_DELAY,
+                default=int(current.get(CONF_WINDOW_DELAY, 0)),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=30,
+                step=1,
+                unit_of_measurement="min",
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
 
         # Pass both room-level overrides and global data as fallback
         schema_dict[vol.Required("overrides")] = _overrides_schema(

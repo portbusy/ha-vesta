@@ -70,6 +70,8 @@
           "override_switch": "Override Emergenza Freddo",
           "vacation_entity": "Entità Modalità Vacanza",
           "vacation_state": "Modalità Vacanza (fallback statico)",
+          "boiler_entity": "Entità Caldaia",
+          "boiler_offset": "Offset Temperatura Mandata Caldaia",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
           "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
         },
@@ -84,6 +86,8 @@
           "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo. Da usare in caso di emergenza freddo.",
           "vacation_entity": "Collega un input_boolean o binary_sensor per controllare dinamicamente la modalità vacanza. Quando è ON, tutte le stanze scendono alla temperatura antigelo. Ha priorità sul toggle statico qui sotto.",
           "vacation_state": "Fallback statico: attiva solo se non hai configurato un'entità vacanza sopra.",
+          "boiler_entity": "L'entità caldaia che Vesta deve controllare direttamente. Quando una stanza richiede calore, Vesta accende la caldaia e imposta la temperatura di mandata. Lascia vuoto se gestisci la caldaia con un'automazione separata.",
+          "boiler_offset": "Offset della temperatura di mandata sopra al setpoint più alto tra le stanze attive. Ad esempio, se una stanza punta a 21°C e l'offset è 5°C, la caldaia viene impostata a 26°C.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
           "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Usata per stimare kWh e costo risparmiati per stanza. Aggiornabile ogni anno."
         }
@@ -105,13 +109,15 @@
           "name": "Nome Stanza",
           "heaters": "Entità Riscaldamento",
           "target_sensor": "Sensori di Temperatura",
-          "window_sensor": "Sensore Finestra/Porta"
+          "window_sensor": "Sensore Finestra/Porta",
+          "window_delay": "Ritardo Apertura Finestra"
         },
         "data_description": {
           "name": "Nome visualizzato per questa entità clima (es. 'Vesta Soggiorno').",
           "heaters": "Seleziona le TRV, gli switch o le entità clima che controllano il riscaldamento in questa stanza.",
           "target_sensor": "Uno o più sensori di temperatura. Le letture multiple vengono mediate. Se tutti vanno offline, viene usato come fallback il sensore interno del TRV.",
-          "window_sensor": "Quando questo sensore rileva una finestra aperta, il riscaldamento viene messo in pausa per risparmiare energia."
+          "window_sensor": "Quando questo sensore rileva una finestra aperta, il riscaldamento viene messo in pausa per risparmiare energia.",
+          "window_delay": "Minuti di attesa dall'apertura della finestra prima di sospendere il riscaldamento. Utile per impianti a pavimento dove una breve ventilazione non dovrebbe interrompere un lungo ciclo di riscaldamento. Imposta 0 per sospendere immediatamente."
         },
         "sections": {
           "overrides": {
@@ -166,6 +172,8 @@
           "override_switch": "Override Emergenza Freddo",
           "vacation_entity": "Entità Modalità Vacanza",
           "vacation_state": "Modalità Vacanza (fallback statico)",
+          "boiler_entity": "Entità Caldaia",
+          "boiler_offset": "Offset Temperatura Mandata Caldaia",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
           "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
         },
@@ -180,6 +188,8 @@
           "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo. Da usare in caso di emergenza freddo.",
           "vacation_entity": "Collega un input_boolean o binary_sensor per controllare dinamicamente la modalità vacanza. Quando è ON, tutte le stanze scendono alla temperatura antigelo. Ha priorità sul toggle statico qui sotto.",
           "vacation_state": "Fallback statico: attiva solo se non hai configurato un'entità vacanza sopra.",
+          "boiler_entity": "L'entità caldaia che Vesta deve controllare direttamente. Lascia vuoto se gestisci la caldaia con un'automazione separata.",
+          "boiler_offset": "Offset della temperatura di mandata sopra al setpoint più alto tra le stanze attive.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
           "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Aggiornabile ogni anno."
         }
@@ -190,13 +200,15 @@
           "name": "Nome Stanza",
           "heaters": "Entità Riscaldamento",
           "target_sensor": "Sensori di Temperatura",
-          "window_sensor": "Sensore Finestra/Porta"
+          "window_sensor": "Sensore Finestra/Porta",
+          "window_delay": "Ritardo Apertura Finestra"
         },
         "data_description": {
           "name": "Nome visualizzato per questa entità clima.",
           "heaters": "TRV, switch o entità clima che controllano il riscaldamento di questa stanza.",
           "target_sensor": "Uno o più sensori di temperatura. Le letture multiple vengono mediate. Se tutti vanno offline, viene usato come fallback il sensore interno del TRV.",
-          "window_sensor": "Il riscaldamento si mette in pausa quando questo sensore rileva una finestra aperta."
+          "window_sensor": "Il riscaldamento si mette in pausa quando questo sensore rileva una finestra aperta.",
+          "window_delay": "Minuti di attesa dall'apertura della finestra prima di sospendere il riscaldamento. Utile per impianti a pavimento. Imposta 0 per sospendere immediatamente."
         },
         "sections": {
           "overrides": {

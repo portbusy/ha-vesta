@@ -49,6 +49,8 @@ If the heater has been running at full power for 45 minutes but the room tempera
 - **Vacation mode entity** — Link any input_boolean or binary_sensor to control vacation mode dynamically from automations or the dashboard. When the entity is ON, all rooms drop to anti-frost temperature. A static fallback toggle is also available for manual use.
 - **Emergency heat override** — Link a switch or input_boolean to instantly force all heaters to maximum output across every room. Useful for emergency cold situations or when you need rapid heating regardless of any other setting.
 - **Energy savings tracking** — Each room exposes dedicated sensor entities for heating time and hours saved per feature (away mode, window detection, eco schedule). When energy consumption and price are configured in Global Settings, Vesta also estimates monthly kWh and cost savings.
+- **Boiler coordinator** — Optionally link a central boiler entity (climate, switch, or input_boolean) in Global Settings. Vesta monitors all rooms and turns the boiler on whenever any room calls for heat. For climate boilers, Vesta also sets the flow temperature: the highest active room setpoint plus a configurable offset (default 5°C), clamped at 80°C. No external automation needed.
+- **Window open delay** — Per-room configurable delay (in minutes) before an open window suppresses heating. Useful for underfloor heating systems where brief ventilation should not interrupt a long heating cycle. Default is 0 (immediate suppression).
 
 ---
 
@@ -114,6 +116,14 @@ Global settings apply to all rooms by default. When editing a room, you can over
 | Vacation Mode Entity | An input_boolean or binary_sensor. When ON, all rooms drop to 5°C. Takes priority over the static toggle. |
 | Vacation Mode (static fallback) | A simple toggle to activate vacation mode when no entity is configured. |
 | Emergency Heat Override | A switch or input_boolean. When ON, all heaters are forced to maximum output immediately. |
+| Boiler Entity | A climate, switch, or input_boolean to control the central boiler. Vesta turns it on when any room calls for heat and (for climate entities) sets the flow temperature automatically. |
+| Boiler Flow Temperature Offset | Added on top of the highest active room setpoint to compute the boiler flow temperature (default 5°C, max 80°C). Only applies when the boiler entity is a climate entity. |
+
+**Per-room settings:**
+
+| Setting | Description |
+|---------|-------------|
+| Window Open Delay | Minutes to wait after a window opens before suppressing heating (default 0). Set to 10–20 for underfloor heating. |
 
 ---
 

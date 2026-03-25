@@ -70,6 +70,8 @@
           "override_switch": "Emergency Heat Override",
           "vacation_entity": "Vacation Mode Entity",
           "vacation_state": "Vacation Mode (static fallback)",
+          "boiler_entity": "Boiler Entity",
+          "boiler_offset": "Boiler Flow Temperature Offset",
           "energy_price_kwh": "Energy Price (€/kWh)",
           "energy_kwh_this_year": "Annual Heating Consumption (kWh)"
         },
@@ -84,6 +86,8 @@
           "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
           "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
           "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
+          "boiler_entity": "The boiler entity Vesta should control directly. When any room calls for heat, Vesta turns the boiler on and sets its flow temperature. Leave empty if you manage the boiler with a separate automation.",
+          "boiler_offset": "Flow temperature offset above the highest active room setpoint. For example, if a room targets 21°C and the offset is 5°C, the boiler is set to 26°C.",
           "energy_price_kwh": "Your current electricity rate. Used to estimate monthly savings in euros.",
           "energy_kwh_this_year": "Total heating energy consumed this year. Used to estimate kWh and cost savings per room. Update each year."
         }
@@ -105,13 +109,15 @@
           "name": "Room Name",
           "heaters": "Heater Entities",
           "target_sensor": "Temperature Sensors",
-          "window_sensor": "Window/Door Sensor"
+          "window_sensor": "Window/Door Sensor",
+          "window_delay": "Window Open Delay"
         },
         "data_description": {
           "name": "Display name for this climate entity (e.g. 'Vesta Living Room').",
           "heaters": "Select the TRVs, switches, or climate entities that control the heating in this room.",
           "target_sensor": "One or more temperature sensors. Multiple readings are averaged. If all go offline, the TRV's internal sensor is used as fallback.",
-          "window_sensor": "When this sensor detects an open window, heating is paused to save energy."
+          "window_sensor": "When this sensor detects an open window, heating is paused to save energy.",
+          "window_delay": "Minutes to wait after a window opens before suppressing heating. Useful for underfloor heating where brief ventilation should not interrupt a long heating cycle. Set to 0 to suppress immediately."
         },
         "sections": {
           "overrides": {
@@ -166,6 +172,8 @@
           "override_switch": "Emergency Heat Override",
           "vacation_entity": "Vacation Mode Entity",
           "vacation_state": "Vacation Mode (static fallback)",
+          "boiler_entity": "Boiler Entity",
+          "boiler_offset": "Boiler Flow Temperature Offset",
           "energy_price_kwh": "Energy Price (€/kWh)",
           "energy_kwh_this_year": "Annual Heating Consumption (kWh)"
         },
@@ -180,6 +188,8 @@
           "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
           "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
           "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
+          "boiler_entity": "The boiler entity Vesta should control directly. When any room calls for heat, Vesta turns the boiler on and sets its flow temperature. Leave empty if you manage the boiler separately.",
+          "boiler_offset": "Flow temperature offset above the highest active room setpoint.",
           "energy_price_kwh": "Your current electricity rate. Used to estimate monthly savings in euros.",
           "energy_kwh_this_year": "Total heating energy consumed this year. Update each year to keep estimates accurate."
         }
@@ -190,13 +200,15 @@
           "name": "Room Name",
           "heaters": "Heater Entities",
           "target_sensor": "Temperature Sensors",
-          "window_sensor": "Window/Door Sensor"
+          "window_sensor": "Window/Door Sensor",
+          "window_delay": "Window Open Delay"
         },
         "data_description": {
           "name": "Display name for this climate entity.",
           "heaters": "TRVs, switches, or climate entities that control this room's heating.",
           "target_sensor": "One or more temperature sensors. Multiple readings are averaged. If all go offline, the TRV's internal sensor is used as fallback.",
-          "window_sensor": "Heating pauses when this sensor detects an open window."
+          "window_sensor": "Heating pauses when this sensor detects an open window.",
+          "window_delay": "Minutes to wait after a window opens before suppressing heating. Useful for underfloor heating. Set to 0 to suppress immediately."
         },
         "sections": {
           "overrides": {

@@ -38,6 +38,7 @@ from .const import (
     CONF_HEATER_ENTITIES,
     CONF_SENSOR,
     CONF_WINDOW_SENSOR,
+    CONF_WINDOW_DELAY,
     CONF_PRESENCE_SENSORS,
     CONF_SCHEDULE,
     CONF_WEATHER,
@@ -137,6 +138,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._target_temp: float | None = None
         self._hvac_mode = HVACMode.HEAT
         self._preset_mode = MODE_SMART_SCHEDULE
+        self._window_ajar = False
+        self._window_ajar_since: float | None = None
         self._window_open = False
         self._vacation_active = False
         self._emergency_heat_active = False
@@ -380,13 +383,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._update_heating_power(1.0 if heater_on else 0.0)
             return
 
-        # 3. Frost Guard (Priority over Window Open)
+        # 3. Window delay: compute effective window_open from raw ajar state
+        if self._window_ajar:
+            delay_min = float(self._entry.data.get(CONF_WINDOW_DELAY, 0))
+            if delay_min <= 0:
+                self._window_open = True
+            elif self._window_ajar_since is not None:
+                elapsed_min = (time.time() - self._window_ajar_since) / 60
+                self._window_open = elapsed_min >= delay_min
+        else:
+            self._window_open = False
+
+        # 4. Frost Guard (Priority over Window Open)
         frost_risk = self._cur_temp < ANTI_FROST_TEMP
 
-        # 4. Compute effective target (pure read, no side effects)
+        # 5. Compute effective target (pure read, no side effects)
         effective_target = self._compute_effective_target()
 
-        # 5. Control Logic
+        # 6. Control Logic
         if self._emergency_heat_active:
             # Emergency cold override: force all heaters to maximum regardless of
             # window state or hvac_mode. Activated via the global override switch.
@@ -460,15 +474,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         await self._set_heaters(switch_on=switch_on, climate_active=climate_active, target_temp=target)
 
-        # 6. Update duty cycle — use TRV internal sensor for valve-openness estimate
+        # 7. Update duty cycle — use TRV internal sensor for valve-openness estimate
         self._update_heating_power(
             self._estimate_heater_power(switch_on, climate_active, target)
         )
 
-        # 7. Hardware Failure Detection
+        # 8. Hardware Failure Detection
         self._check_hardware_performance()
 
-        # 8. Learning
+        # 9. Learning
         if not (
             self._vacation_active
             or self._emergency_heat_active
@@ -482,6 +496,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self.async_write_ha_state()
         for sensor in self._companion_sensors:
             sensor.async_write_ha_state()
+
+        # 10. Notify boiler coordinator so it can aggregate demand across all rooms
+        coordinator = self.hass.data[DOMAIN].get("boiler_coordinator")
+        if coordinator:
+            await coordinator.async_update(self.hass.data[DOMAIN].get("rooms", []))
 
     def _update_force_return(self) -> None:
         """Re-evaluate pre-heating on every tick.
@@ -1138,8 +1157,19 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @callback
     def _on_window(self, event):
         s = event.data.get("new_state")
-        if s:
-            self._window_open = s.state == STATE_ON
+        if not s:
+            return
+        is_open = s.state == STATE_ON
+        if is_open:
+            if not self._window_ajar:
+                self._window_ajar = True
+                self._window_ajar_since = time.time()
+            # Trigger a tick so state is written; delay logic runs inside _async_tick
+            self.hass.async_create_task(self._async_tick(None))
+        else:
+            self._window_ajar = False
+            self._window_ajar_since = None
+            self._window_open = False
             self.hass.async_create_task(self._async_tick(None))
 
     @callback
