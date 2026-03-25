@@ -41,6 +41,7 @@ MANUAL_OVERRIDE_TIMER_OR_SCHEDULE = "timer_or_schedule"
 
 # Override Toggles (per Room)
 CONF_OVERRIDE_COMFORT = "override_comfort"
+CONF_OVERRIDE_ECO = "override_eco"
 CONF_OVERRIDE_AWAY = "override_away"
 CONF_OVERRIDE_PRESENCE = "override_presence"
 CONF_OVERRIDE_WEATHER = "override_weather"

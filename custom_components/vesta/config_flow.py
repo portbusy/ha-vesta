@@ -38,6 +38,7 @@ from .const import (
     CONF_AWAY_TEMP,
     CONF_AVG_SPEED,
     CONF_OVERRIDE_COMFORT,
+    CONF_OVERRIDE_ECO,
     CONF_OVERRIDE_AWAY,
     CONF_OVERRIDE_PRESENCE,
     CONF_OVERRIDE_WEATHER,
@@ -201,6 +202,14 @@ def _overrides_schema(
         vol.Optional(
             CONF_COMFORT_TEMP,
             default=d.get(CONF_COMFORT_TEMP) or g.get(CONF_COMFORT_TEMP, 21.0),
+        ): _temp_selector(),
+        vol.Required(
+            CONF_OVERRIDE_ECO,
+            default=d.get(CONF_OVERRIDE_ECO, False),
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_ECO_TEMP,
+            default=d.get(CONF_ECO_TEMP) or g.get(CONF_ECO_TEMP, 18.0),
         ): _temp_selector(),
         vol.Required(
             CONF_OVERRIDE_AWAY,

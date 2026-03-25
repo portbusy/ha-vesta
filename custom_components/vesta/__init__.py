@@ -139,6 +139,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for room in hass.data[DOMAIN]["rooms"]:
             if hasattr(room, "async_write_ha_state"):
                 room.async_write_ha_state()
+            if hasattr(room, "_async_tick"):
+                hass.async_create_task(room._async_tick(None))
         return True
 
     # Climate must be set up before sensor so that sensor.py can find the entity.

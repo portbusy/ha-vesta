@@ -59,6 +59,7 @@ from .const import (
     MANUAL_OVERRIDE_PERMANENT,
     MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
     CONF_OVERRIDE_COMFORT,
+    CONF_OVERRIDE_ECO,
     CONF_OVERRIDE_AWAY,
     CONF_OVERRIDE_PRESENCE,
     CONF_OVERRIDE_WEATHER,
@@ -195,14 +196,20 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._companion_sensors: list = []
         self._savings_cache: dict = {}
 
+        # Manual override pause (away while in manual)
+        self._manual_paused_for_away: bool = False
+
         # Safety & Fail-safe state
         self._last_heater_state: bool | None = None   # switch/water_heater bang-bang
         self._last_climate_active: bool | None = None  # climate entity setpoint mode
         self._last_target_temp: float | None = None
+        self._last_heater_cmd_time: float = 0.0       # fix 1: TRV command grace period
+        self._last_external_override_time: float = 0.0  # fix 4: multi-TRV debounce
         self._manual_start_time: float | None = None
         self._hardware_failure = False
         self._stuck_check_time: float | None = None
         self._stuck_check_temp: float | None = None
+        self._window_stuck_warned: bool = False        # fix 8: stuck window sensor
         self._event_listeners: list = []
 
     @property
@@ -239,6 +246,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
+            "manual_override_mode_active": (
+                self._get_manual_override_mode()
+                if self._preset_mode in (MODE_MANUAL, MODE_AWAY) and (self._preset_mode == MODE_MANUAL or self._manual_paused_for_away)
+                else None
+            ),
             "preset_mode": self._preset_mode,
             "target_temp": self._target_temp,
             "manual_start_time": self._manual_start_time,
@@ -253,6 +265,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_ACTUAL_HEATING_H_MONTH: round(self._monthly_actual_heating_s / 3600, 2),
             # Internal state (used by RestoreEntity)
             "_schedule_state_at_override": self._schedule_state_at_override,
+            "_manual_paused_for_away": self._manual_paused_for_away,
             # Internal monthly state (used by RestoreEntity)
             "_monthly_actual_heating_s": self._monthly_actual_heating_s,
             "_monthly_away_s": self._monthly_away_s,
@@ -315,6 +328,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Handle a temperature change made directly on a TRV or via an external app."""
         if self._vacation_active or self._emergency_heat_active:
             return
+        self._last_external_override_time = time.time()  # debounce multi-TRV
         self._target_temp = temp
         self._last_target_temp = temp  # prevent immediate re-trigger
         self._preset_mode = MODE_MANUAL
@@ -466,6 +480,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             elif self._window_ajar_since is not None:
                 elapsed_min = (time.time() - self._window_ajar_since) / 60
                 self._window_open = elapsed_min >= delay_min
+            # Warn if window has been open suspiciously long (possible stuck sensor)
+            if self._window_ajar_since is not None:
+                hours_open = (time.time() - self._window_ajar_since) / 3600
+                if hours_open > 2 and not self._window_stuck_warned:
+                    _LOGGER.warning(
+                        "%s: window sensor has been reporting open for %.0f hours. "
+                        "Check whether the sensor is stuck.",
+                        self._name,
+                        hours_open,
+                    )
+                    self._window_stuck_warned = True
         else:
             self._window_open = False
 
@@ -781,6 +806,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         "set_temperature",
                         {"entity_id": eid, "temperature": target_temp},
                     )
+                    self._last_heater_cmd_time = time.time()
             else:
                 # Bang-bang for switches and other simple heaters
                 if switch_state_changed:
@@ -800,7 +826,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @property
     def eco_temp(self) -> float:
-        """Return the eco temperature."""
+        """Return the eco temperature (per-room override if configured)."""
+        if self._entry.data.get(CONF_OVERRIDE_ECO):
+            t = self._entry.data.get(CONF_ECO_TEMP)
+            if t is not None:
+                return float(t)
         return float(self._get_global(CONF_ECO_TEMP, 18.0))
 
     @property
@@ -1011,7 +1041,42 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ovr_mode = self._get_manual_override_mode()
 
             if any_home:
-                if self._preset_mode == MODE_AWAY:
+                if self._manual_paused_for_away:
+                    # Returning home while manual override was paused for away
+                    self._manual_paused_for_away = False
+                    if ovr_mode == MANUAL_OVERRIDE_ON_ARRIVAL:
+                        _LOGGER.info(
+                            "Arrival for %s: reverting paused override (on_arrival) → schedule.",
+                            self._name,
+                        )
+                        self._preset_mode = MODE_SMART_SCHEDULE
+                        self._force_return = False
+                        self._schedule_state_at_override = None
+                    elif ovr_mode in (MANUAL_OVERRIDE_TIMER, MANUAL_OVERRIDE_TIMER_OR_SCHEDULE):
+                        if self._get_manual_timeout() > 0:
+                            _LOGGER.info(
+                                "Arrival for %s: resuming paused override (timer, %d min left).",
+                                self._name,
+                                self._get_manual_timeout(),
+                            )
+                            self._preset_mode = MODE_MANUAL
+                        else:
+                            _LOGGER.info(
+                                "Arrival for %s: paused override timer expired → schedule.",
+                                self._name,
+                            )
+                            self._preset_mode = MODE_SMART_SCHEDULE
+                            self._force_return = False
+                            self._schedule_state_at_override = None
+                    else:
+                        # next_schedule / next_schedule_on: resume and let section 2 check
+                        _LOGGER.info(
+                            "Arrival for %s: resuming paused override (%s).",
+                            self._name,
+                            ovr_mode,
+                        )
+                        self._preset_mode = MODE_MANUAL
+                elif self._preset_mode == MODE_AWAY:
                     self._preset_mode = MODE_SMART_SCHEDULE
                     self._force_return = False
                 elif (
@@ -1019,22 +1084,34 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     and ovr_mode == MANUAL_OVERRIDE_ON_ARRIVAL
                     and not self._was_any_home
                 ):
-                    # Someone just arrived → revert manual override
+                    # Direct arrival while in manual mode (not paused): revert
                     _LOGGER.info(
-                        "Arrival detected for %s: reverting manual override.", self._name
+                        "Arrival for %s: reverting manual override (on_arrival).", self._name
                     )
                     self._preset_mode = MODE_SMART_SCHEDULE
                     self._force_return = False
                     self._schedule_state_at_override = None
-            elif self._preset_mode == MODE_MANUAL and ovr_mode == MANUAL_OVERRIDE_ON_DEPARTURE and self._was_any_home:
-                # Everyone just left → revert manual override to away mode
-                _LOGGER.info(
-                    "Departure detected for %s: reverting manual override to away.", self._name
-                )
-                self._preset_mode = MODE_AWAY
-                self._force_return = False
-                self._schedule_state_at_override = None
-            elif self._preset_mode not in (MODE_MANUAL, MODE_VACATION):
+            elif self._preset_mode == MODE_MANUAL:
+                if ovr_mode == MANUAL_OVERRIDE_ON_DEPARTURE and self._was_any_home:
+                    # on_departure: explicitly switch to away
+                    _LOGGER.info(
+                        "Departure for %s: manual → away (on_departure).", self._name
+                    )
+                    self._preset_mode = MODE_AWAY
+                    self._force_return = False
+                    self._schedule_state_at_override = None
+                elif ovr_mode != MANUAL_OVERRIDE_PERMANENT:
+                    # All non-permanent modes: pause override, use away temp while empty
+                    _LOGGER.info(
+                        "Departure for %s: pausing manual override (%s), away temp active.",
+                        self._name,
+                        ovr_mode,
+                    )
+                    self._manual_paused_for_away = True
+                    self._preset_mode = MODE_AWAY
+                    self._force_return = False
+                # permanent: stay in manual regardless
+            elif self._preset_mode not in (MODE_VACATION,):
                 self._preset_mode = MODE_AWAY
                 self._force_return = False
 
@@ -1085,6 +1162,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             )
             self._schedule_state_at_override = old.attributes.get(
                 "_schedule_state_at_override"
+            )
+            self._manual_paused_for_away = bool(
+                old.attributes.get("_manual_paused_for_away", False)
             )
 
             if old.state in (HVACMode.HEAT, HVACMode.OFF):
@@ -1152,6 +1232,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             )
         )
         self._setup_listeners()
+
+        # Warn if presence sensors are not Person entities (GPS pre-heating won't work)
+        g = self.hass.data[DOMAIN].get("global")
+        _presence = (
+            self._entry.data.get(CONF_PRESENCE_SENSORS)
+            if self._entry.data.get(CONF_OVERRIDE_PRESENCE)
+            else (g.data.get(CONF_PRESENCE_SENSORS) if g else None)
+        ) or []
+        for _pid in _presence:
+            if not _pid.startswith("person."):
+                _LOGGER.warning(
+                    "%s: presence sensor '%s' is not a Person entity — "
+                    "GPS-based pre-heating will not work for this sensor.",
+                    self._name,
+                    _pid,
+                )
+
         self.hass.async_create_task(self._async_tick(None))
 
     async def async_will_remove_from_hass(self) -> None:
@@ -1261,12 +1358,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             domain = s.entity_id.split(".")[0]
             if domain == "climate":
                 self._last_climate_active = self._heater_active(s)
-                # Detect temperature change made directly on TRV or via external app
+                # Detect temperature change made directly on TRV or via external app.
+                # Grace periods prevent false positives from:
+                #   - TRV rounding (e.g. Tado 0.5°C steps) after a Vesta command
+                #   - Stale state reports from a second TRV right after another TRV changed
                 trv_target = s.attributes.get("temperature")
                 if trv_target is not None and self._last_target_temp is not None:
                     try:
-                        if abs(float(trv_target) - self._last_target_temp) > 0.1:
-                            self._handle_external_temp_override(float(trv_target))
+                        trv_temp = float(trv_target)
+                        diff = abs(trv_temp - self._last_target_temp)
+                        if diff > 0.1:
+                            now = time.time()
+                            in_cmd_grace = (now - self._last_heater_cmd_time) < 60
+                            in_ext_grace = (now - self._last_external_override_time) < 30
+                            if in_cmd_grace or in_ext_grace:
+                                # Accept TRV's rounded/acknowledged value
+                                self._last_target_temp = trv_temp
+                            else:
+                                self._handle_external_temp_override(trv_temp)
                     except (ValueError, TypeError):
                         pass
             else:
@@ -1303,6 +1412,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._window_ajar = False
             self._window_ajar_since = None
             self._window_open = False
+            self._window_stuck_warned = False
             self.hass.async_create_task(self._async_tick(None))
 
     @callback
