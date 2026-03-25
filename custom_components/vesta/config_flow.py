@@ -27,6 +27,7 @@ from .const import (
     CONF_WEATHER,
     CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
+    CONF_VACATION_ENTITY,
     CONF_NAME,
     CONF_AREA,
     CONF_COMFORT_TEMP,
@@ -366,6 +367,11 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             domain=["input_boolean", "switch"]
                         )
                     ),
+                    vol.Optional(CONF_VACATION_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["input_boolean", "binary_sensor"]
+                        )
+                    ),
                     vol.Optional(
                         CONF_VACATION_STATE, default=False
                     ): selector.BooleanSelector(),
@@ -650,6 +656,24 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain=["input_boolean", "switch"]
+                    )
+                )
+            )
+
+        vacation_entity = current.get(CONF_VACATION_ENTITY)
+        if vacation_entity:
+            schema_dict[
+                vol.Optional(CONF_VACATION_ENTITY, default=vacation_entity)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["input_boolean", "binary_sensor"]
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_VACATION_ENTITY)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["input_boolean", "binary_sensor"]
                     )
                 )
             )

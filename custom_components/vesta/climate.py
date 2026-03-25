@@ -41,7 +41,9 @@ from .const import (
     CONF_PRESENCE_SENSORS,
     CONF_SCHEDULE,
     CONF_WEATHER,
+    CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
+    CONF_VACATION_ENTITY,
     CONF_COMFORT_TEMP,
     CONF_ECO_TEMP,
     CONF_AWAY_TEMP,
@@ -61,6 +63,7 @@ from .const import (
     ATTR_DAILY_USAGE,
     ATTR_NEAREST_DISTANCE,
     ATTR_VACATION_MODE,
+    ATTR_EMERGENCY_HEAT,
     ATTR_OUTDOOR_TEMP,
     CONF_ENERGY_PRICE_KWH,
     CONF_ENERGY_ANNUAL_DATA,
@@ -130,6 +133,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._preset_mode = MODE_SMART_SCHEDULE
         self._window_open = False
         self._vacation_active = False
+        self._emergency_heat_active = False
         self._force_return = False
         self._nearest_distance = 0.0
         self._last_nearest_distance = 0.0
@@ -204,6 +208,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_DAILY_USAGE: round(self._daily_usage_seconds / 60, 1),
             ATTR_NEAREST_DISTANCE: round(self._nearest_distance, 0),
             ATTR_VACATION_MODE: self._vacation_active,
+            ATTR_EMERGENCY_HEAT: self._emergency_heat_active,
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
@@ -304,23 +309,30 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         effective_target = self._compute_effective_target()
 
         # 5. Control Logic
-        # Frost protection is unconditional: overrides hvac_mode=OFF and open windows
-        target = ANTI_FROST_TEMP if frost_risk else effective_target
+        if self._emergency_heat_active:
+            # Emergency cold override: force all heaters to maximum regardless of
+            # window state or hvac_mode. Activated via the global override switch.
+            target = self.max_temp
+            climate_active = True
+            switch_on = True
+        else:
+            # Frost protection is unconditional: overrides hvac_mode=OFF and open windows
+            target = ANTI_FROST_TEMP if frost_risk else effective_target
 
-        # Climate entities (TRVs/AC): setpoint mode — Vesta decides whether heating
-        # should be active and sends the target temperature; the device manages its
-        # own valve/compressor internally.
-        climate_active = frost_risk or (
-            self._hvac_mode == HVACMode.HEAT and not self._window_open
-        )
+            # Climate entities (TRVs/AC): setpoint mode — Vesta decides whether heating
+            # should be active and sends the target temperature; the device manages its
+            # own valve/compressor internally.
+            climate_active = frost_risk or (
+                self._hvac_mode == HVACMode.HEAT and not self._window_open
+            )
 
-        # Switches and other simple heaters: bang-bang control — Vesta acts as the
-        # thermostat and decides when to turn the device on or off.
-        switch_on = False
-        if frost_risk:
-            switch_on = self._cur_temp < (ANTI_FROST_TEMP + 0.8)
-        elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
-            switch_on = self._cur_temp < (effective_target - 0.2)
+            # Switches and other simple heaters: bang-bang control — Vesta acts as the
+            # thermostat and decides when to turn the device on or off.
+            switch_on = False
+            if frost_risk:
+                switch_on = self._cur_temp < (ANTI_FROST_TEMP + 0.8)
+            elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
+                switch_on = self._cur_temp < (effective_target - 0.2)
 
         # Count usage on scheduled ticks (use switch_on as the "actively heating" proxy)
         if scheduled:
@@ -354,6 +366,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # 8. Learning
         if not (
             self._vacation_active
+            or self._emergency_heat_active
             or self._force_return
             or self._nearest_distance > 500
             or self._hardware_failure
@@ -698,12 +711,25 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if self._target_temp is None:
             self._target_temp = self.comfort_temp
 
-        # 1. Vacation Mode (Global)
-        vacation_status = g.data.get(CONF_VACATION_STATE, False)
-        if isinstance(vacation_status, str):
-            self._vacation_active = vacation_status == "on"
+        # 1. Vacation Mode (Global) — entity takes priority over static boolean
+        vacation_entity_id = g.data.get(CONF_VACATION_ENTITY)
+        if vacation_entity_id:
+            v_state = self.hass.states.get(vacation_entity_id)
+            self._vacation_active = v_state is not None and v_state.state == STATE_ON
         else:
-            self._vacation_active = bool(vacation_status)
+            vacation_status = g.data.get(CONF_VACATION_STATE, False)
+            if isinstance(vacation_status, str):
+                self._vacation_active = vacation_status == "on"
+            else:
+                self._vacation_active = bool(vacation_status)
+
+        # 1b. Emergency Heat Override Switch (Global)
+        override_sw_id = g.data.get(CONF_OVERRIDE_SWITCH)
+        if override_sw_id:
+            sw_state = self.hass.states.get(override_sw_id)
+            self._emergency_heat_active = sw_state is not None and sw_state.state == STATE_ON
+        else:
+            self._emergency_heat_active = False
 
         # 2. Schedule Logic: HA schedule entity
         if self._preset_mode != MODE_MANUAL:
@@ -964,6 +990,22 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
+        vacation_entity_id = g.data.get(CONF_VACATION_ENTITY) if g else None
+        if vacation_entity_id:
+            self._event_listeners.append(
+                async_track_state_change_event(
+                    self.hass, [vacation_entity_id], self._on_vacation_entity
+                )
+            )
+
+        override_sw_id = g.data.get(CONF_OVERRIDE_SWITCH) if g else None
+        if override_sw_id:
+            self._event_listeners.append(
+                async_track_state_change_event(
+                    self.hass, [override_sw_id], self._on_override_switch
+                )
+            )
+
     @callback
     def _on_presence(self, event):
         """React immediately when a person's state changes (home/away/GPS update)."""
@@ -1014,6 +1056,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._outdoor_temp = float(temp)
                 except (ValueError, TypeError):
                     pass
+
+    @callback
+    def _on_vacation_entity(self, event):
+        """React immediately when the vacation mode entity changes state."""
+        self.hass.async_create_task(self._async_tick(None))
+
+    @callback
+    def _on_override_switch(self, event):
+        """React immediately when the emergency heat override switch changes state."""
+        self.hass.async_create_task(self._async_tick(None))
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         if t := kwargs.get(ATTR_TEMPERATURE):

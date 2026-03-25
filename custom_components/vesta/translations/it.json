@@ -5,10 +5,10 @@
         "state_attributes": {
           "preset_mode": {
             "state": {
-              "smart_schedule": "Programmazione Intelligente",
-              "manual": "Override Manuale",
+              "smart_schedule": "Programmazione",
+              "manual": "Manuale",
               "away": "Fuori Casa",
-              "vacation": "Modalità Vacanza"
+              "vacation": "Vacanza"
             }
           }
         }
@@ -67,8 +67,9 @@
           "presence_sensors": "Sensori di Presenza",
           "schedule_entity": "Programmazione Riscaldamento",
           "weather_entity": "Fornitore Meteo",
-          "override_switch": "Interruttore Override Manuale",
-          "vacation_state": "Modalità Vacanza",
+          "override_switch": "Override Emergenza Freddo",
+          "vacation_entity": "Entità Modalità Vacanza",
+          "vacation_state": "Modalità Vacanza (fallback statico)",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
           "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
         },
@@ -80,8 +81,9 @@
           "presence_sensors": "Entità persona usate per rilevare se qualcuno è a casa. Gestisce automaticamente la modalità casa/fuori.",
           "schedule_entity": "Un helper Programmazione che controlla quando applicare la temperatura comfort o eco. ON = comfort, OFF = eco.",
           "weather_entity": "Usato per la compensazione meteo: aumenta il riscaldamento quando fa molto freddo fuori.",
-          "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo.",
-          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C).",
+          "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo. Da usare in caso di emergenza freddo.",
+          "vacation_entity": "Collega un input_boolean o binary_sensor per controllare dinamicamente la modalità vacanza. Quando è ON, tutte le stanze scendono alla temperatura antigelo. Ha priorità sul toggle statico qui sotto.",
+          "vacation_state": "Fallback statico: attiva solo se non hai configurato un'entità vacanza sopra.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
           "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Usata per stimare kWh e costo risparmiati per stanza. Aggiornabile ogni anno."
         }
@@ -161,8 +163,9 @@
           "presence_sensors": "Sensori di Presenza",
           "schedule_entity": "Programmazione Riscaldamento",
           "weather_entity": "Fornitore Meteo",
-          "override_switch": "Interruttore Override Manuale",
-          "vacation_state": "Modalità Vacanza",
+          "override_switch": "Override Emergenza Freddo",
+          "vacation_entity": "Entità Modalità Vacanza",
+          "vacation_state": "Modalità Vacanza (fallback statico)",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
           "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
         },
@@ -174,8 +177,9 @@
           "presence_sensors": "Entità persona usate per rilevare se qualcuno è a casa.",
           "schedule_entity": "Helper Programmazione: ON = comfort, OFF = eco.",
           "weather_entity": "Usato per la compensazione meteo quando fa molto freddo fuori.",
-          "override_switch": "Un input_boolean o switch che forza tutti i riscaldatori al massimo quando attivo.",
-          "vacation_state": "Quando attivo, tutte le stanze scendono alla temperatura antigelo (5°C).",
+          "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo. Da usare in caso di emergenza freddo.",
+          "vacation_entity": "Collega un input_boolean o binary_sensor per controllare dinamicamente la modalità vacanza. Quando è ON, tutte le stanze scendono alla temperatura antigelo. Ha priorità sul toggle statico qui sotto.",
+          "vacation_state": "Fallback statico: attiva solo se non hai configurato un'entità vacanza sopra.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
           "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Aggiornabile ogni anno."
         }

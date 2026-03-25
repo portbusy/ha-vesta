@@ -5,10 +5,10 @@
         "state_attributes": {
           "preset_mode": {
             "state": {
-              "smart_schedule": "Smart Schedule",
-              "manual": "Manual Override",
-              "away": "Away Mode",
-              "vacation": "Vacation Mode"
+              "smart_schedule": "Schedule",
+              "manual": "Manual",
+              "away": "Away",
+              "vacation": "Vacation"
             }
           }
         }
@@ -67,8 +67,9 @@
           "presence_sensors": "Presence Sensors",
           "schedule_entity": "Heating Schedule",
           "weather_entity": "Weather Provider",
-          "override_switch": "Manual Override Switch",
-          "vacation_state": "Vacation Mode",
+          "override_switch": "Emergency Heat Override",
+          "vacation_entity": "Vacation Mode Entity",
+          "vacation_state": "Vacation Mode (static fallback)",
           "energy_price_kwh": "Energy Price (€/kWh)",
           "energy_kwh_this_year": "Annual Heating Consumption (kWh)"
         },
@@ -80,8 +81,9 @@
           "presence_sensors": "Person entities used to detect if someone is home. Drives automatic home/away switching.",
           "schedule_entity": "A Schedule helper that controls when comfort vs eco temperatures apply. ON = comfort, OFF = eco.",
           "weather_entity": "Used for weather compensation: boosts heating when it's very cold outside.",
-          "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum.",
-          "vacation_state": "When enabled, all rooms drop to anti-frost temperature (5°C).",
+          "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
+          "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
+          "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
           "energy_price_kwh": "Your current electricity rate. Used to estimate monthly savings in euros.",
           "energy_kwh_this_year": "Total heating energy consumed this year. Used to estimate kWh and cost savings per room. You can update this each year."
         }
@@ -161,8 +163,9 @@
           "presence_sensors": "Presence Sensors",
           "schedule_entity": "Heating Schedule",
           "weather_entity": "Weather Provider",
-          "override_switch": "Manual Override Switch",
-          "vacation_state": "Vacation Mode",
+          "override_switch": "Emergency Heat Override",
+          "vacation_entity": "Vacation Mode Entity",
+          "vacation_state": "Vacation Mode (static fallback)",
           "energy_price_kwh": "Energy Price (€/kWh)",
           "energy_kwh_this_year": "Annual Heating Consumption (kWh)"
         },
@@ -174,8 +177,9 @@
           "presence_sensors": "Person entities used to detect if someone is home.",
           "schedule_entity": "Schedule helper: ON = comfort, OFF = eco.",
           "weather_entity": "Used for weather compensation when it's very cold outside.",
-          "override_switch": "An input_boolean or switch that forces all heaters to maximum when ON.",
-          "vacation_state": "When enabled, all rooms drop to anti-frost temperature (5°C).",
+          "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
+          "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
+          "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
           "energy_price_kwh": "Your current electricity rate. Used to estimate monthly savings in euros.",
           "energy_kwh_this_year": "Total heating energy consumed this year. Update this each year to keep estimates accurate."
         }
