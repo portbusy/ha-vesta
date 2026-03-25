@@ -73,7 +73,9 @@
           "boiler_entity": "Entità Caldaia",
           "boiler_offset": "Offset Temperatura Mandata Caldaia",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
-          "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
+          "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)",
+          "manual_override_mode": "Modalità di Ripristino Override Manuale",
+          "manual_override_hours": "Durata Timer Override Manuale"
         },
         "data_description": {
           "comfort_temp": "Temperatura target quando qualcuno è a casa e la programmazione è attiva.",
@@ -89,7 +91,9 @@
           "boiler_entity": "L'entità caldaia che Vesta deve controllare direttamente. Quando una stanza richiede calore, Vesta accende la caldaia e imposta la temperatura di mandata. Lascia vuoto se gestisci la caldaia con un'automazione separata.",
           "boiler_offset": "Offset della temperatura di mandata sopra al setpoint più alto tra le stanze attive. Ad esempio, se una stanza punta a 21°C e l'offset è 5°C, la caldaia viene impostata a 26°C.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
-          "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Usata per stimare kWh e costo risparmiati per stanza. Aggiornabile ogni anno."
+          "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Usata per stimare kWh e costo risparmiati per stanza. Aggiornabile ogni anno.",
+          "manual_override_mode": "Determina quando Vesta ripristina la programmazione dopo una modifica manuale della temperatura.",
+          "manual_override_hours": "Per quanto tempo mantenere la temperatura manuale prima di ripristinare. Usato solo con le modalità Timer e Timer o Programmazione."
         }
       },
       "area": {
@@ -133,7 +137,10 @@
               "override_comfort": "Usa temperatura comfort personalizzata",
               "comfort_temp": "Temperatura Comfort della Stanza",
               "override_away": "Usa temperatura fuori casa personalizzata",
-              "away_temp": "Temperatura Fuori Casa della Stanza"
+              "away_temp": "Temperatura Fuori Casa della Stanza",
+              "override_manual_mode": "Usa modalità di ripristino override manuale personalizzata",
+              "manual_override_mode": "Modalità di Ripristino Override Manuale della Stanza",
+              "manual_override_hours": "Durata Timer Override Manuale della Stanza"
             },
             "data_description": {
               "override_presence": "Quando attivo, questa stanza usa i propri sensori di presenza invece di quelli globali.",
@@ -145,7 +152,10 @@
               "override_comfort": "Quando attivo, questa stanza usa la propria temperatura comfort invece del valore globale.",
               "comfort_temp": "Temperatura target quando la programmazione di questa stanza è attiva e qualcuno è a casa.",
               "override_away": "Quando attivo, questa stanza usa la propria temperatura fuori casa invece del valore globale.",
-              "away_temp": "Temperatura target per questa stanza quando tutti sono fuori."
+              "away_temp": "Temperatura target per questa stanza quando tutti sono fuori.",
+              "override_manual_mode": "Quando attivo, questa stanza usa il proprio comportamento di ripristino override manuale invece di quello globale.",
+              "manual_override_mode": "Determina quando questa stanza ripristina la programmazione dopo una modifica manuale della temperatura.",
+              "manual_override_hours": "Per quanto tempo mantenere la temperatura manuale prima di ripristinare (solo modalità timer)."
             }
           }
         }
@@ -175,7 +185,9 @@
           "boiler_entity": "Entità Caldaia",
           "boiler_offset": "Offset Temperatura Mandata Caldaia",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
-          "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)"
+          "energy_kwh_this_year": "Consumo Annuale Riscaldamento (kWh)",
+          "manual_override_mode": "Modalità di Ripristino Override Manuale",
+          "manual_override_hours": "Durata Timer Override Manuale"
         },
         "data_description": {
           "comfort_temp": "Temperatura target quando qualcuno è a casa e la programmazione è attiva.",
@@ -191,7 +203,9 @@
           "boiler_entity": "L'entità caldaia che Vesta deve controllare direttamente. Lascia vuoto se gestisci la caldaia con un'automazione separata.",
           "boiler_offset": "Offset della temperatura di mandata sopra al setpoint più alto tra le stanze attive.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
-          "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Aggiornabile ogni anno."
+          "energy_kwh_this_year": "Energia totale consumata per il riscaldamento quest'anno. Aggiornabile ogni anno.",
+          "manual_override_mode": "Determina quando Vesta ripristina la programmazione dopo una modifica manuale della temperatura.",
+          "manual_override_hours": "Per quanto tempo mantenere la temperatura manuale prima di ripristinare (solo modalità timer)."
         }
       },
       "room": {
@@ -224,7 +238,10 @@
               "override_comfort": "Usa temperatura comfort personalizzata",
               "comfort_temp": "Temperatura Comfort della Stanza",
               "override_away": "Usa temperatura fuori casa personalizzata",
-              "away_temp": "Temperatura Fuori Casa della Stanza"
+              "away_temp": "Temperatura Fuori Casa della Stanza",
+              "override_manual_mode": "Usa modalità di ripristino override manuale personalizzata",
+              "manual_override_mode": "Modalità di Ripristino Override Manuale della Stanza",
+              "manual_override_hours": "Durata Timer Override Manuale della Stanza"
             },
             "data_description": {
               "override_presence": "Usa sensori di presenza specifici per questa stanza.",
@@ -236,7 +253,10 @@
               "override_comfort": "Usa una temperatura comfort personalizzata per questa stanza.",
               "comfort_temp": "Temperatura comfort quando la programmazione è attiva.",
               "override_away": "Usa una temperatura fuori casa personalizzata per questa stanza.",
-              "away_temp": "Temperatura fuori casa quando nessuno è in casa."
+              "away_temp": "Temperatura fuori casa quando nessuno è in casa.",
+              "override_manual_mode": "Quando attivo, questa stanza usa il proprio comportamento di ripristino override manuale.",
+              "manual_override_mode": "Determina quando questa stanza ripristina la programmazione dopo una modifica manuale.",
+              "manual_override_hours": "Per quanto tempo mantenere la temperatura manuale prima di ripristinare (solo modalità timer)."
             }
           }
         }
@@ -246,6 +266,19 @@
       "missing_presence_sensors": "Devi selezionare almeno un sensore di presenza quando l'override è attivo.",
       "missing_schedule_entity": "Devi selezionare un'entità programmazione quando l'override è attivo.",
       "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo."
+    }
+  },
+  "selector": {
+    "manual_override_mode": {
+      "options": {
+        "timer": "Timer — ripristina dopo una durata fissa",
+        "next_schedule": "Prossimo cambio programmazione — ripristina al prossimo cambio ON/OFF",
+        "next_schedule_on": "Prossima accensione programmazione — ripristina quando la programmazione si attiva (periodo comfort)",
+        "on_arrival": "All'arrivo — ripristina quando qualcuno arriva a casa",
+        "on_departure": "Alla partenza — passa alla modalità assenza quando tutti escono",
+        "permanent": "Permanente — mantieni fino alla prossima modifica manuale",
+        "timer_or_schedule": "Timer o programmazione — il primo dei due che si verifica"
+      }
     }
   }
 }

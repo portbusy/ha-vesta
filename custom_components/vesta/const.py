@@ -27,12 +27,25 @@ CONF_ECO_TEMP = "eco_temp"
 CONF_AWAY_TEMP = "away_temp"
 CONF_AVG_SPEED = "avg_travel_speed"
 
+# Manual override behaviour
+CONF_MANUAL_OVERRIDE_MODE = "manual_override_mode"
+CONF_MANUAL_OVERRIDE_HOURS = "manual_override_hours"
+
+MANUAL_OVERRIDE_TIMER = "timer"
+MANUAL_OVERRIDE_NEXT_SCHEDULE = "next_schedule"
+MANUAL_OVERRIDE_NEXT_SCHEDULE_ON = "next_schedule_on"
+MANUAL_OVERRIDE_ON_ARRIVAL = "on_arrival"
+MANUAL_OVERRIDE_ON_DEPARTURE = "on_departure"
+MANUAL_OVERRIDE_PERMANENT = "permanent"
+MANUAL_OVERRIDE_TIMER_OR_SCHEDULE = "timer_or_schedule"
+
 # Override Toggles (per Room)
 CONF_OVERRIDE_COMFORT = "override_comfort"
 CONF_OVERRIDE_AWAY = "override_away"
 CONF_OVERRIDE_PRESENCE = "override_presence"
 CONF_OVERRIDE_WEATHER = "override_weather"
 CONF_OVERRIDE_SCHEDULE = "override_schedule"
+CONF_OVERRIDE_MANUAL_MODE = "override_manual_mode"
 
 # Attributes
 ATTR_HEATING_RATE = "heating_rate_deg_min"

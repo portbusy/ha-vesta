@@ -21,7 +21,7 @@ Every minute, Vesta evaluates each room and decides whether to turn the heater o
 4. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
 5. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
 6. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
-7. **Manual override** — You can set any temperature directly. Vesta holds it for 4 hours, then returns to the schedule automatically.
+7. **Manual override** — You can set any temperature directly from the UI, a TRV physical dial, or an external app. Vesta detects the change and enters manual mode. How long it holds depends on the configurable revert mode (timer, next schedule change, on arrival/departure, or permanent).
 
 ### Thermal learning
 
@@ -77,9 +77,27 @@ Each block in a Schedule helper can carry data in the "Additional data" field (v
 | Preset | Behaviour |
 |--------|-----------|
 | **Smart Schedule** | Follows the schedule. Temperature adjusts with presence, weather, and pre-heating. |
-| **Manual** | Holds the temperature you set. Reverts to Smart Schedule after 4 hours. |
+| **Manual** | Holds the temperature you set. Reverts to Smart Schedule according to the configured revert mode. |
 | **Away** | Holds at the away temperature. Pre-heating starts automatically when you're heading home. |
 | **Vacation** | Holds at 5°C (anti-frost). Presence detection does not override this mode. |
+
+---
+
+## Manual override revert modes
+
+When you set a temperature manually (from the UI, a TRV dial, or an external app like Tado), Vesta enters **Manual** mode. The revert mode controls how and when it returns to the schedule. Configure it in Global Settings; each room can optionally override it.
+
+| Mode | Behaviour |
+|------|-----------|
+| **Timer** | Reverts after a fixed duration (default 4 h, configurable). |
+| **Next schedule change** | Reverts at the next ON→OFF or OFF→ON transition of the schedule. |
+| **Next schedule ON** | Reverts only when the schedule turns ON (comfort period starts). |
+| **On arrival** | Reverts when someone arrives home. |
+| **On departure** | Switches to Away mode when everyone leaves. |
+| **Permanent** | Holds until you change it manually again. |
+| **Timer or schedule** | Reverts at whichever comes first — timer expiry or next schedule change. |
+
+Vesta also detects temperature changes made directly on the TRV or via an external app (e.g. Tado). Any change that differs from Vesta's last setpoint by more than 0.1°C is treated as a manual override and triggers the same revert behaviour as a UI change.
 
 ---
 

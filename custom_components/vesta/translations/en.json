@@ -70,6 +70,8 @@
           "override_switch": "Emergency Heat Override",
           "vacation_entity": "Vacation Mode Entity",
           "vacation_state": "Vacation Mode (static fallback)",
+          "manual_override_mode": "Manual Override Revert Mode",
+          "manual_override_hours": "Manual Override Timer Duration",
           "boiler_entity": "Boiler Entity",
           "boiler_offset": "Boiler Flow Temperature Offset",
           "energy_price_kwh": "Energy Price (€/kWh)",
@@ -86,6 +88,8 @@
           "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
           "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
           "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
+          "manual_override_mode": "Determines when Vesta reverts to the schedule after a manual temperature change (from the UI, TRV, or external app).",
+          "manual_override_hours": "How long to hold the manual temperature before reverting. Only used with Timer and Timer or Schedule modes.",
           "boiler_entity": "The boiler entity Vesta should control directly. When any room calls for heat, Vesta turns the boiler on and sets its flow temperature. Leave empty if you manage the boiler with a separate automation.",
           "boiler_offset": "Flow temperature offset above the highest active room setpoint. For example, if a room targets 21°C and the offset is 5°C, the boiler is set to 26°C.",
           "energy_price_kwh": "Your current electricity rate. Used to estimate monthly savings in euros.",
@@ -145,7 +149,10 @@
               "override_comfort": "When enabled, this room uses its own comfort temperature instead of the global default.",
               "comfort_temp": "Target temperature when this room's schedule is active and someone is home.",
               "override_away": "When enabled, this room uses its own away temperature instead of the global default.",
-              "away_temp": "Target temperature for this room when everyone is away."
+              "away_temp": "Target temperature for this room when everyone is away.",
+              "override_manual_mode": "When enabled, this room uses its own manual override revert behaviour instead of the global default.",
+              "manual_override_mode": "Determines when this room reverts to the schedule after a manual temperature change.",
+              "manual_override_hours": "How long to hold the manual temperature before reverting (timer modes only)."
             }
           }
         }
@@ -190,6 +197,8 @@
           "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
           "boiler_entity": "The boiler entity Vesta should control directly. When any room calls for heat, Vesta turns the boiler on and sets its flow temperature. Leave empty if you manage the boiler separately.",
           "boiler_offset": "Flow temperature offset above the highest active room setpoint.",
+          "manual_override_mode": "Determines when Vesta reverts to the schedule after a manual temperature change.",
+          "manual_override_hours": "How long to hold the manual temperature before reverting (timer modes only).",
           "energy_price_kwh": "Your current electricity rate. Used to estimate monthly savings in euros.",
           "energy_kwh_this_year": "Total heating energy consumed this year. Update each year to keep estimates accurate."
         }
@@ -224,7 +233,10 @@
               "override_comfort": "Use custom comfort temperature",
               "comfort_temp": "Room Comfort Temperature",
               "override_away": "Use custom away temperature",
-              "away_temp": "Room Away Temperature"
+              "away_temp": "Room Away Temperature",
+              "override_manual_mode": "Use custom manual override revert mode",
+              "manual_override_mode": "Room Manual Override Revert Mode",
+              "manual_override_hours": "Room Manual Override Timer Duration"
             },
             "data_description": {
               "override_presence": "Use room-specific presence sensors instead of global.",
@@ -236,7 +248,10 @@
               "override_comfort": "Use a custom comfort temperature for this room.",
               "comfort_temp": "Comfort temperature when schedule is active.",
               "override_away": "Use a custom away temperature for this room.",
-              "away_temp": "Away temperature when no one is home."
+              "away_temp": "Away temperature when no one is home.",
+              "override_manual_mode": "When enabled, this room uses its own manual override revert behaviour.",
+              "manual_override_mode": "Determines when this room reverts to the schedule after a manual temperature change.",
+              "manual_override_hours": "How long to hold the manual temperature before reverting (timer modes only)."
             }
           }
         }
@@ -246,6 +261,19 @@
       "missing_presence_sensors": "You must select at least one presence sensor when the override is enabled.",
       "missing_schedule_entity": "You must select a schedule entity when the override is enabled.",
       "missing_weather_entity": "You must select a weather provider when the override is enabled."
+    }
+  },
+  "selector": {
+    "manual_override_mode": {
+      "options": {
+        "timer": "Timer — revert after a fixed duration",
+        "next_schedule": "Next schedule change — revert at the next ON/OFF transition",
+        "next_schedule_on": "Next schedule ON — revert when the schedule turns ON (comfort period)",
+        "on_arrival": "On arrival — revert when someone arrives home",
+        "on_departure": "On departure — revert to away mode when everyone leaves",
+        "permanent": "Permanent — hold until manually changed",
+        "timer_or_schedule": "Timer or schedule — whichever comes first"
+      }
     }
   }
 }

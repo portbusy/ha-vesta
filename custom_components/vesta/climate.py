@@ -49,11 +49,21 @@ from .const import (
     CONF_ECO_TEMP,
     CONF_AWAY_TEMP,
     CONF_AVG_SPEED,
+    CONF_MANUAL_OVERRIDE_MODE,
+    CONF_MANUAL_OVERRIDE_HOURS,
+    MANUAL_OVERRIDE_TIMER,
+    MANUAL_OVERRIDE_NEXT_SCHEDULE,
+    MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+    MANUAL_OVERRIDE_ON_ARRIVAL,
+    MANUAL_OVERRIDE_ON_DEPARTURE,
+    MANUAL_OVERRIDE_PERMANENT,
+    MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
     CONF_OVERRIDE_COMFORT,
     CONF_OVERRIDE_AWAY,
     CONF_OVERRIDE_PRESENCE,
     CONF_OVERRIDE_WEATHER,
     CONF_OVERRIDE_SCHEDULE,
+    CONF_OVERRIDE_MANUAL_MODE,
     MODE_SMART_SCHEDULE,
     MODE_MANUAL,
     MODE_AWAY,
@@ -146,6 +156,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._force_return = False
         self._nearest_distance = 0.0
         self._last_nearest_distance = 0.0
+        self._was_any_home = False
+        self._schedule_state_at_override: str | None = None
 
         # Duty cycle tracking
         self._duty_history: deque[float] = deque(maxlen=DUTY_CYCLE_WINDOW)
@@ -239,6 +251,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_SAVED_WINDOW_H_MONTH: round(self._monthly_window_s / 3600, 2),
             ATTR_SAVED_ECO_H_MONTH: round(self._monthly_eco_s / 3600, 2),
             ATTR_ACTUAL_HEATING_H_MONTH: round(self._monthly_actual_heating_s / 3600, 2),
+            # Internal state (used by RestoreEntity)
+            "_schedule_state_at_override": self._schedule_state_at_override,
             # Internal monthly state (used by RestoreEntity)
             "_monthly_actual_heating_s": self._monthly_actual_heating_s,
             "_monthly_away_s": self._monthly_away_s,
@@ -252,11 +266,68 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         attrs.update(self._compute_savings_est())
         return attrs
 
+    def _get_manual_override_mode(self) -> str:
+        """Return the effective manual override revert mode for this room."""
+        if self._entry.data.get(CONF_OVERRIDE_MANUAL_MODE):
+            return self._entry.data.get(CONF_MANUAL_OVERRIDE_MODE, MANUAL_OVERRIDE_TIMER)
+        return self._get_global(CONF_MANUAL_OVERRIDE_MODE, MANUAL_OVERRIDE_TIMER)
+
+    def _get_manual_override_hours(self) -> float:
+        """Return the effective timer duration (hours) for this room."""
+        if self._entry.data.get(CONF_OVERRIDE_MANUAL_MODE):
+            h = self._entry.data.get(CONF_MANUAL_OVERRIDE_HOURS)
+            if h is not None:
+                return float(h)
+        return float(self._get_global(CONF_MANUAL_OVERRIDE_HOURS, MANUAL_OVERRIDE_TIMEOUT_HRS))
+
     def _get_manual_timeout(self) -> int:
+        """Return remaining minutes before manual mode reverts (timer modes only)."""
         if self._preset_mode != MODE_MANUAL or not self._manual_start_time:
             return 0
+        mode = self._get_manual_override_mode()
+        if mode not in (MANUAL_OVERRIDE_TIMER, MANUAL_OVERRIDE_TIMER_OR_SCHEDULE):
+            return 0
         elapsed = (time.time() - self._manual_start_time) / 60
-        return max(0, int((MANUAL_OVERRIDE_TIMEOUT_HRS * 60) - elapsed))
+        return max(0, int((self._get_manual_override_hours() * 60) - elapsed))
+
+    def _record_schedule_state_for_override(self) -> None:
+        """Snapshot the current schedule state so schedule-based revert modes can detect transitions."""
+        mode = self._get_manual_override_mode()
+        if mode not in (
+            MANUAL_OVERRIDE_NEXT_SCHEDULE,
+            MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+            MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
+        ):
+            self._schedule_state_at_override = None
+            return
+        g = self.hass.data[DOMAIN].get("global")
+        sched_id = (
+            self._entry.data.get(CONF_SCHEDULE)
+            if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
+            else (g.data.get(CONF_SCHEDULE) if g else None)
+        )
+        if sched_id and (s := self.hass.states.get(sched_id)):
+            self._schedule_state_at_override = s.state
+        else:
+            self._schedule_state_at_override = None
+
+    def _handle_external_temp_override(self, temp: float) -> None:
+        """Handle a temperature change made directly on a TRV or via an external app."""
+        if self._vacation_active or self._emergency_heat_active:
+            return
+        self._target_temp = temp
+        self._last_target_temp = temp  # prevent immediate re-trigger
+        self._preset_mode = MODE_MANUAL
+        self._force_return = False
+        self._manual_start_time = time.time()
+        self._record_schedule_state_for_override()
+        _LOGGER.info(
+            "External temperature override detected on %s: %.1f°C → switching to manual mode (%s)",
+            self._name,
+            temp,
+            self._get_manual_override_mode(),
+        )
+        self.hass.async_create_task(self._async_tick(None))
 
     def _update_heating_power(self, power: float) -> None:
         """Track duty cycle to compute heating power percentage.
@@ -356,14 +427,18 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         await self._update_state()
         self._update_force_return()
 
-        # 1. Manual Timeout Guard: Back to schedule after X hours
-        if self._preset_mode == MODE_MANUAL and self._get_manual_timeout() == 0:
-            _LOGGER.info(
-                "Manual override timeout for %s. Returning to schedule.",
-                self._name,
-            )
-            self._preset_mode = MODE_SMART_SCHEDULE
-            self._force_return = False
+        # 1. Manual revert guard (timer modes)
+        if self._preset_mode == MODE_MANUAL:
+            ovr_mode = self._get_manual_override_mode()
+            if ovr_mode in (MANUAL_OVERRIDE_TIMER, MANUAL_OVERRIDE_TIMER_OR_SCHEDULE):
+                if self._get_manual_timeout() == 0:
+                    _LOGGER.info(
+                        "Manual override timed out for %s. Returning to schedule.",
+                        self._name,
+                    )
+                    self._preset_mode = MODE_SMART_SCHEDULE
+                    self._force_return = False
+                    self._schedule_state_at_override = None
 
         # 2. Safety Check: Sensor failure
         if self._cur_temp is None:
@@ -841,12 +916,35 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._emergency_heat_active = False
 
         # 2. Schedule Logic: HA schedule entity
+        sched_id = (
+            self._entry.data.get(CONF_SCHEDULE)
+            if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
+            else g.data.get(CONF_SCHEDULE)
+        )
+        if sched_id and (s_state := self.hass.states.get(sched_id)):
+            # Schedule-based manual revert (next_schedule / next_schedule_on / timer_or_schedule)
+            if (
+                self._preset_mode == MODE_MANUAL
+                and self._schedule_state_at_override is not None
+                and s_state.state != self._schedule_state_at_override
+            ):
+                ovr_mode = self._get_manual_override_mode()
+                should_revert = (
+                    ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
+                    or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
+                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and s_state.state == STATE_ON)
+                )
+                if should_revert:
+                    _LOGGER.info(
+                        "Schedule changed for %s: reverting manual override (%s).",
+                        self._name,
+                        ovr_mode,
+                    )
+                    self._preset_mode = MODE_SMART_SCHEDULE
+                    self._force_return = False
+                    self._schedule_state_at_override = None
+
         if self._preset_mode != MODE_MANUAL:
-            sched_id = (
-                self._entry.data.get(CONF_SCHEDULE)
-                if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
-                else g.data.get(CONF_SCHEDULE)
-            )
             if sched_id and (s_state := self.hass.states.get(sched_id)):
                 if self._preset_mode == MODE_AWAY:
                     # In away mode the schedule cannot override temperature or turn
@@ -910,13 +1008,37 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                             min_dist = dist
 
             self._nearest_distance = min_dist
+            ovr_mode = self._get_manual_override_mode()
+
             if any_home:
                 if self._preset_mode == MODE_AWAY:
                     self._preset_mode = MODE_SMART_SCHEDULE
+                    self._force_return = False
+                elif (
+                    self._preset_mode == MODE_MANUAL
+                    and ovr_mode == MANUAL_OVERRIDE_ON_ARRIVAL
+                    and not self._was_any_home
+                ):
+                    # Someone just arrived → revert manual override
+                    _LOGGER.info(
+                        "Arrival detected for %s: reverting manual override.", self._name
+                    )
+                    self._preset_mode = MODE_SMART_SCHEDULE
+                    self._force_return = False
+                    self._schedule_state_at_override = None
+            elif self._preset_mode == MODE_MANUAL and ovr_mode == MANUAL_OVERRIDE_ON_DEPARTURE and self._was_any_home:
+                # Everyone just left → revert manual override to away mode
+                _LOGGER.info(
+                    "Departure detected for %s: reverting manual override to away.", self._name
+                )
+                self._preset_mode = MODE_AWAY
                 self._force_return = False
+                self._schedule_state_at_override = None
             elif self._preset_mode not in (MODE_MANUAL, MODE_VACATION):
                 self._preset_mode = MODE_AWAY
                 self._force_return = False
+
+            self._was_any_home = any_home
 
         # 4. Weather / Outdoor Temperature
         weather_id = (
@@ -960,6 +1082,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._monthly_hdh_eco = float(old.attributes.get("_monthly_hdh_eco", 0.0))
             self._last_savings_reset_month = old.attributes.get(
                 "_last_savings_reset_month"
+            )
+            self._schedule_state_at_override = old.attributes.get(
+                "_schedule_state_at_override"
             )
 
             if old.state in (HVACMode.HEAT, HVACMode.OFF):
@@ -1136,6 +1261,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             domain = s.entity_id.split(".")[0]
             if domain == "climate":
                 self._last_climate_active = self._heater_active(s)
+                # Detect temperature change made directly on TRV or via external app
+                trv_target = s.attributes.get("temperature")
+                if trv_target is not None and self._last_target_temp is not None:
+                    try:
+                        if abs(float(trv_target) - self._last_target_temp) > 0.1:
+                            self._handle_external_temp_override(float(trv_target))
+                    except (ValueError, TypeError):
+                        pass
             else:
                 self._last_heater_state = self._heater_active(s)
             self.async_write_ha_state()
@@ -1200,6 +1333,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._preset_mode = MODE_MANUAL
             self._force_return = False
             self._manual_start_time = time.time()
+            self._record_schedule_state_for_override()
             await self._async_tick(None)
 
     def _get_global(self, key: str, default: Any) -> Any:
@@ -1242,4 +1376,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._force_return = False
         if m == MODE_MANUAL:
             self._manual_start_time = time.time()
+            self._record_schedule_state_for_override()
+        else:
+            self._schedule_state_at_override = None
         await self._async_tick(None)

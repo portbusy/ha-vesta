@@ -42,6 +42,16 @@ from .const import (
     CONF_OVERRIDE_PRESENCE,
     CONF_OVERRIDE_WEATHER,
     CONF_OVERRIDE_SCHEDULE,
+    CONF_OVERRIDE_MANUAL_MODE,
+    CONF_MANUAL_OVERRIDE_MODE,
+    CONF_MANUAL_OVERRIDE_HOURS,
+    MANUAL_OVERRIDE_TIMER,
+    MANUAL_OVERRIDE_NEXT_SCHEDULE,
+    MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+    MANUAL_OVERRIDE_ON_ARRIVAL,
+    MANUAL_OVERRIDE_ON_DEPARTURE,
+    MANUAL_OVERRIDE_PERMANENT,
+    MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
     CONF_ENERGY_PRICE_KWH,
     CONF_ENERGY_ANNUAL_DATA,
     CONF_ENERGY_KWH_THIS_YEAR,
@@ -200,6 +210,38 @@ def _overrides_schema(
             CONF_AWAY_TEMP,
             default=d.get(CONF_AWAY_TEMP) or g.get(CONF_AWAY_TEMP, 15.0),
         ): _temp_selector(),
+        vol.Required(
+            CONF_OVERRIDE_MANUAL_MODE,
+            default=d.get(CONF_OVERRIDE_MANUAL_MODE, False),
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_MANUAL_OVERRIDE_MODE,
+            default=d.get(CONF_MANUAL_OVERRIDE_MODE) or g.get(CONF_MANUAL_OVERRIDE_MODE, MANUAL_OVERRIDE_TIMER),
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    MANUAL_OVERRIDE_TIMER,
+                    MANUAL_OVERRIDE_NEXT_SCHEDULE,
+                    MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+                    MANUAL_OVERRIDE_ON_ARRIVAL,
+                    MANUAL_OVERRIDE_ON_DEPARTURE,
+                    MANUAL_OVERRIDE_PERMANENT,
+                    MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
+                ],
+                translation_key="manual_override_mode",
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        ),
+        vol.Optional(
+            CONF_MANUAL_OVERRIDE_HOURS,
+            default=float(d.get(CONF_MANUAL_OVERRIDE_HOURS) or g.get(CONF_MANUAL_OVERRIDE_HOURS, 4.0)),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.5, max=24, step=0.5,
+                unit_of_measurement="h",
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        ),
     })
 
     return section(vol.Schema(schema_dict), {"collapsed": True})
@@ -378,6 +420,32 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(
                         CONF_VACATION_STATE, default=False
                     ): selector.BooleanSelector(),
+                    vol.Required(
+                        CONF_MANUAL_OVERRIDE_MODE, default=MANUAL_OVERRIDE_TIMER
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                MANUAL_OVERRIDE_TIMER,
+                                MANUAL_OVERRIDE_NEXT_SCHEDULE,
+                                MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+                                MANUAL_OVERRIDE_ON_ARRIVAL,
+                                MANUAL_OVERRIDE_ON_DEPARTURE,
+                                MANUAL_OVERRIDE_PERMANENT,
+                                MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
+                            ],
+                            translation_key="manual_override_mode",
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_MANUAL_OVERRIDE_HOURS, default=4.0
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.5, max=24, step=0.5,
+                            unit_of_measurement="h",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
                     vol.Optional(CONF_BOILER_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain=["climate", "switch", "input_boolean"]
@@ -716,6 +784,40 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_VACATION_STATE, False),
             )
         ] = selector.BooleanSelector()
+
+        schema_dict[
+            vol.Required(
+                CONF_MANUAL_OVERRIDE_MODE,
+                default=current.get(CONF_MANUAL_OVERRIDE_MODE, MANUAL_OVERRIDE_TIMER),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    MANUAL_OVERRIDE_TIMER,
+                    MANUAL_OVERRIDE_NEXT_SCHEDULE,
+                    MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+                    MANUAL_OVERRIDE_ON_ARRIVAL,
+                    MANUAL_OVERRIDE_ON_DEPARTURE,
+                    MANUAL_OVERRIDE_PERMANENT,
+                    MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
+                ],
+                translation_key="manual_override_mode",
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        )
+
+        schema_dict[
+            vol.Optional(
+                CONF_MANUAL_OVERRIDE_HOURS,
+                default=float(current.get(CONF_MANUAL_OVERRIDE_HOURS, 4.0)),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.5, max=24, step=0.5,
+                unit_of_measurement="h",
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
 
         boiler = current.get(CONF_BOILER_ENTITY)
         if boiler:
