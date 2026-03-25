@@ -122,7 +122,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._data = data
         self._name = data[CONF_NAME]
         self._heaters = data[CONF_HEATER_ENTITIES]
-        self._sensor_id = data[CONF_SENSOR]
+        raw_sensor = data[CONF_SENSOR]
+        self._sensor_ids: list[str] = (
+            raw_sensor if isinstance(raw_sensor, list) else [raw_sensor]
+        )
+        self._sensor_readings: dict[str, float | None] = {
+            sid: None for sid in self._sensor_ids
+        }
         self._window_sensor_id = data.get(CONF_WINDOW_SENSOR)
 
         # State
@@ -139,7 +145,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._last_nearest_distance = 0.0
 
         # Duty cycle tracking
-        self._duty_history: deque[bool] = deque(maxlen=DUTY_CYCLE_WINDOW)
+        self._duty_history: deque[float] = deque(maxlen=DUTY_CYCLE_WINDOW)
         self._heating_power = 0.0
 
         # Learning
@@ -240,13 +246,47 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         elapsed = (time.time() - self._manual_start_time) / 60
         return max(0, int((MANUAL_OVERRIDE_TIMEOUT_HRS * 60) - elapsed))
 
-    def _update_heating_power(self, heater_on: bool) -> None:
-        """Track duty cycle to compute heating power percentage."""
-        self._duty_history.append(heater_on)
+    def _update_heating_power(self, power: float) -> None:
+        """Track duty cycle to compute heating power percentage.
+
+        power is a fraction [0.0-1.0]: 1.0 for switches fully on, or the
+        estimated valve openness for TRV entities.
+        """
+        self._duty_history.append(power)
         if self._duty_history:
             self._heating_power = (
                 sum(self._duty_history) / len(self._duty_history)
             ) * 100.0
+
+    def _estimate_heater_power(
+        self, switch_on: bool, climate_active: bool, target: float
+    ) -> float:
+        """Estimate combined heating power fraction [0.0-1.0] across all heaters.
+
+        Switches contribute binary 0/1. Climate entities (TRVs) contribute a
+        valve-openness fraction derived from their internal temperature sensor:
+        fully open when ≥2°C below target, closed when at or above target.
+        Falls back to binary climate_active when the TRV has no temperature data.
+        """
+        contributions: list[float] = []
+        for eid in self._heaters:
+            if eid.split(".")[0] == "climate":
+                if not climate_active:
+                    contributions.append(0.0)
+                    continue
+                state = self.hass.states.get(eid)
+                trv_temp = state.attributes.get("current_temperature") if state else None
+                if trv_temp is not None:
+                    try:
+                        fraction = min(1.0, max(0.0, (target - float(trv_temp)) / 2.0))
+                        contributions.append(fraction)
+                    except (ValueError, TypeError):
+                        contributions.append(1.0)
+                else:
+                    contributions.append(1.0)
+            else:
+                contributions.append(1.0 if switch_on else 0.0)
+        return sum(contributions) / len(contributions) if contributions else 0.0
 
     def _check_daily_reset(self) -> None:
         """Reset daily counters at midnight and monthly counters on the 1st."""
@@ -268,6 +308,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._daily_eco_s = 0
             self._last_usage_reset_date = today
 
+    def _compute_cur_temp(self) -> float | None:
+        """Average configured sensor readings; fall back to TRV internal sensor."""
+        values = [v for v in self._sensor_readings.values() if v is not None]
+        if values:
+            return sum(values) / len(values)
+        # Fallback: read current_temperature attribute from any available climate heater
+        for eid in self._heaters:
+            if eid.split(".")[0] == "climate":
+                state = self.hass.states.get(eid)
+                if state:
+                    temp = state.attributes.get("current_temperature")
+                    if temp is not None:
+                        try:
+                            return float(temp)
+                        except (ValueError, TypeError):
+                            pass
+        return None
+
     async def _async_tick(self, now):
         """Robust Heartbeat with Fail-Safe checks."""
         # now is a datetime when called by the scheduler, None for manual triggers
@@ -275,6 +333,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # 0. Daily usage reset check
         self._check_daily_reset()
+
+        # Recompute cur_temp on every tick — also picks up TRV fallback when
+        # configured sensors are offline
+        self._cur_temp = self._compute_cur_temp()
 
         await self._update_state()
         self._update_force_return()
@@ -290,7 +352,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # 2. Safety Check: Sensor failure
         if self._cur_temp is None:
-            _LOGGER.error("Emergency: Sensor %s is offline!", self._sensor_id)
+            _LOGGER.error(
+                "Emergency: All sensors offline for %s (configured: %s)",
+                self._name,
+                self._sensor_ids,
+            )
             heater_on = (dt_util.now().minute % 10) == 0  # Minimal pulse
             if scheduled and heater_on:
                 self._daily_usage_seconds += 60
@@ -299,7 +365,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 climate_active=heater_on,
                 target_temp=ANTI_FROST_TEMP if heater_on else None,
             )
-            self._update_heating_power(heater_on)
+            self._update_heating_power(1.0 if heater_on else 0.0)
             return
 
         # 3. Frost Guard (Priority over Window Open)
@@ -357,8 +423,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         await self._set_heaters(switch_on=switch_on, climate_active=climate_active, target_temp=target)
 
-        # 6. Update duty cycle
-        self._update_heating_power(switch_on)
+        # 6. Update duty cycle — use TRV internal sensor for valve-openness estimate
+        self._update_heating_power(
+            self._estimate_heater_power(switch_on, climate_active, target)
+        )
 
         # 7. Hardware Failure Detection
         self._check_hardware_performance()
@@ -885,14 +953,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 except (ValueError, TypeError):
                     pass
 
-        if self._sensor_id and (
-            state := self.hass.states.get(self._sensor_id)
-        ):
-            if state.state not in ("unknown", "unavailable"):
-                try:
-                    self._cur_temp = float(state.state)
-                except ValueError:
-                    pass
+        for sid in self._sensor_ids:
+            if state := self.hass.states.get(sid):
+                if state.state not in ("unknown", "unavailable"):
+                    try:
+                        self._sensor_readings[sid] = float(state.state)
+                    except (ValueError, TypeError):
+                        pass
+        self._cur_temp = self._compute_cur_temp()
 
         # Initialise heater state from reality to avoid a spurious command at startup
         if self._heaters:
@@ -934,10 +1002,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             listener()
         self._event_listeners = []
 
-        if self._sensor_id:
+        if self._sensor_ids:
             self._event_listeners.append(
                 async_track_state_change_event(
-                    self.hass, [self._sensor_id], self._on_sensor
+                    self.hass, self._sensor_ids, self._on_sensor
                 )
             )
 
@@ -1031,12 +1099,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @callback
     def _on_sensor(self, event):
         s = event.data.get("new_state")
-        if s and s.state not in ("unknown", "unavailable"):
-            try:
-                self._cur_temp = float(s.state)
-                self.async_write_ha_state()
-            except (ValueError, TypeError):
-                pass
+        if s:
+            if s.state not in ("unknown", "unavailable"):
+                try:
+                    self._sensor_readings[s.entity_id] = float(s.state)
+                except (ValueError, TypeError):
+                    self._sensor_readings[s.entity_id] = None
+            else:
+                self._sensor_readings[s.entity_id] = None
+            self._cur_temp = self._compute_cur_temp()
+            self.async_write_ha_state()
 
     @callback
     def _on_window(self, event):

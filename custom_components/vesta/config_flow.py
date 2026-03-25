@@ -470,18 +470,21 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 )
 
-            # Temp sensor: area-filtered, auto-select first found
+            # Temp sensor: area-filtered, multiple allowed
+            raw_sensor = d.get(CONF_SENSOR)
             temp_kwargs = {}
-            if d.get(CONF_SENSOR):
-                temp_kwargs["default"] = d[CONF_SENSOR]
+            if raw_sensor:
+                temp_kwargs["default"] = (
+                    raw_sensor if isinstance(raw_sensor, list) else [raw_sensor]
+                )
             if temp_ids:
                 schema[vol.Required(CONF_SENSOR, **temp_kwargs)] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(include_entities=temp_ids)
+                    selector.EntitySelectorConfig(include_entities=temp_ids, multiple=True)
                 )
             else:
                 schema[vol.Required(CONF_SENSOR, **temp_kwargs)] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="sensor", device_class="temperature"
+                        domain="sensor", device_class="temperature", multiple=True
                     )
                 )
 
@@ -514,7 +517,7 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             schema[vol.Required(CONF_SENSOR)] = selector.EntitySelector(
                 selector.EntitySelectorConfig(
-                    domain="sensor", device_class="temperature"
+                    domain="sensor", device_class="temperature", multiple=True
                 )
             )
             schema[vol.Optional(CONF_WINDOW_SENSOR)] = (
@@ -773,11 +776,14 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     d.get("heater_ids", []) + current.get(CONF_HEATER_ENTITIES, [])
                 )
             )
-            saved_sensor = current.get(CONF_SENSOR)
+            raw_saved_sensor = current.get(CONF_SENSOR)
+            saved_sensor = (
+                raw_saved_sensor
+                if isinstance(raw_saved_sensor, list)
+                else ([raw_saved_sensor] if raw_saved_sensor else [])
+            )
             temp_ids = list(
-                dict.fromkeys(
-                    d.get("temp_ids", []) + ([saved_sensor] if saved_sensor else [])
-                )
+                dict.fromkeys(d.get("temp_ids", []) + saved_sensor)
             )
             saved_window = current.get(CONF_WINDOW_SENSOR)
             window_ids = list(
@@ -811,19 +817,19 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     )
                 )
 
-            sensor = saved_sensor or d.get(CONF_SENSOR)
+            sensor_default = saved_sensor or []
             if temp_ids:
                 schema_dict[
-                    vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
+                    vol.Required(CONF_SENSOR, **({"default": sensor_default} if sensor_default else {}))
                 ] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(include_entities=temp_ids)
+                    selector.EntitySelectorConfig(include_entities=temp_ids, multiple=True)
                 )
             else:
                 schema_dict[
-                    vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
+                    vol.Required(CONF_SENSOR, **({"default": sensor_default} if sensor_default else {}))
                 ] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="sensor", device_class="temperature"
+                        domain="sensor", device_class="temperature", multiple=True
                     )
                 )
 
@@ -859,12 +865,16 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     domain=["climate", "switch", "water_heater"], multiple=True
                 )
             )
-            sensor = current.get(CONF_SENSOR)
+            raw_sensor = current.get(CONF_SENSOR)
+            sensor = (
+                raw_sensor if isinstance(raw_sensor, list)
+                else ([raw_sensor] if raw_sensor else [])
+            )
             schema_dict[
                 vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
             ] = selector.EntitySelector(
                 selector.EntitySelectorConfig(
-                    domain="sensor", device_class="temperature"
+                    domain="sensor", device_class="temperature", multiple=True
                 )
             )
             window = current.get(CONF_WINDOW_SENSOR)

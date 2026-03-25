@@ -104,13 +104,13 @@
         "data": {
           "name": "Room Name",
           "heaters": "Heater Entities",
-          "target_sensor": "Temperature Sensor",
+          "target_sensor": "Temperature Sensors",
           "window_sensor": "Window/Door Sensor"
         },
         "data_description": {
           "name": "Display name for this climate entity (e.g. 'Vesta Living Room').",
           "heaters": "Select the TRVs, switches, or climate entities that control the heating in this room.",
-          "target_sensor": "The temperature sensor used to measure the current room temperature.",
+          "target_sensor": "One or more temperature sensors. Multiple readings are averaged. If all go offline, the TRV's internal sensor is used as fallback.",
           "window_sensor": "When this sensor detects an open window, heating is paused to save energy."
         },
         "sections": {
@@ -189,13 +189,13 @@
         "data": {
           "name": "Room Name",
           "heaters": "Heater Entities",
-          "target_sensor": "Temperature Sensor",
+          "target_sensor": "Temperature Sensors",
           "window_sensor": "Window/Door Sensor"
         },
         "data_description": {
           "name": "Display name for this climate entity.",
           "heaters": "TRVs, switches, or climate entities that control this room's heating.",
-          "target_sensor": "Temperature sensor for measuring the current room temperature.",
+          "target_sensor": "One or more temperature sensors. Multiple readings are averaged. If all go offline, the TRV's internal sensor is used as fallback.",
           "window_sensor": "Heating pauses when this sensor detects an open window."
         },
         "sections": {

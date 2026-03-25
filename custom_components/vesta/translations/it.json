@@ -104,13 +104,13 @@
         "data": {
           "name": "Nome Stanza",
           "heaters": "Entità Riscaldamento",
-          "target_sensor": "Sensore di Temperatura",
+          "target_sensor": "Sensori di Temperatura",
           "window_sensor": "Sensore Finestra/Porta"
         },
         "data_description": {
           "name": "Nome visualizzato per questa entità clima (es. 'Vesta Soggiorno').",
           "heaters": "Seleziona le TRV, gli switch o le entità clima che controllano il riscaldamento in questa stanza.",
-          "target_sensor": "Il sensore di temperatura usato per misurare la temperatura attuale della stanza.",
+          "target_sensor": "Uno o più sensori di temperatura. Le letture multiple vengono mediate. Se tutti vanno offline, viene usato come fallback il sensore interno del TRV.",
           "window_sensor": "Quando questo sensore rileva una finestra aperta, il riscaldamento viene messo in pausa per risparmiare energia."
         },
         "sections": {
@@ -189,13 +189,13 @@
         "data": {
           "name": "Nome Stanza",
           "heaters": "Entità Riscaldamento",
-          "target_sensor": "Sensore di Temperatura",
+          "target_sensor": "Sensori di Temperatura",
           "window_sensor": "Sensore Finestra/Porta"
         },
         "data_description": {
           "name": "Nome visualizzato per questa entità clima.",
           "heaters": "TRV, switch o entità clima che controllano il riscaldamento di questa stanza.",
-          "target_sensor": "Sensore di temperatura per misurare la temperatura attuale della stanza.",
+          "target_sensor": "Uno o più sensori di temperatura. Le letture multiple vengono mediate. Se tutti vanno offline, viene usato come fallback il sensore interno del TRV.",
           "window_sensor": "Il riscaldamento si mette in pausa quando questo sensore rileva una finestra aperta."
         },
         "sections": {
