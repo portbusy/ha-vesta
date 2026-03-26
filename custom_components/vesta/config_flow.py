@@ -116,6 +116,22 @@ def _flatten_overrides(user_input: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+def _optional_entity(
+    key: str,
+    value,
+    cfg: selector.EntitySelectorConfig,
+) -> dict:
+    """Return {vol.Optional(key): EntitySelector} with default set only when value is truthy.
+
+    Passing default=None to an EntitySelector raises a voluptuous validation
+    error, so we only set the default when there is an actual value to show.
+    """
+    sel = selector.EntitySelector(cfg)
+    if value:
+        return {vol.Optional(key, default=value): sel}
+    return {vol.Optional(key): sel}
+
+
 def _validate_overrides(user_input: dict[str, Any], errors: dict[str, str]) -> None:
     """Validate that if an override is enabled, the corresponding entity is provided."""
     overrides = user_input.get("overrides") or {}
@@ -149,50 +165,35 @@ def _overrides_schema(
     sched_default = _entity_default(CONF_SCHEDULE)
     weather_default = _entity_default(CONF_WEATHER)
 
+    pres_default = _entity_default(CONF_PRESENCE_SENSORS, [])
+
     schema_dict: dict = {
         vol.Required(
             CONF_OVERRIDE_PRESENCE,
             default=d.get(CONF_OVERRIDE_PRESENCE, False),
         ): selector.BooleanSelector(),
-        vol.Optional(
-            CONF_PRESENCE_SENSORS,
-            default=_entity_default(CONF_PRESENCE_SENSORS, []),
-        ): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="person", multiple=True)
-        ),
-        vol.Required(
-            CONF_OVERRIDE_SCHEDULE,
-            default=d.get(CONF_OVERRIDE_SCHEDULE, False),
-        ): selector.BooleanSelector(),
     }
-
-    # Only set default if we have a valid entity id (avoids None validation error)
-    if sched_default:
-        schema_dict[vol.Optional(CONF_SCHEDULE, default=sched_default)] = (
-            selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="schedule")
-            )
+    schema_dict.update(
+        _optional_entity(
+            CONF_PRESENCE_SENSORS,
+            pres_default,
+            selector.EntitySelectorConfig(domain="person", multiple=True),
         )
-    else:
-        schema_dict[vol.Optional(CONF_SCHEDULE)] = selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="schedule")
-        )
-
+    )
+    schema_dict[vol.Required(
+        CONF_OVERRIDE_SCHEDULE,
+        default=d.get(CONF_OVERRIDE_SCHEDULE, False),
+    )] = selector.BooleanSelector()
+    schema_dict.update(
+        _optional_entity(CONF_SCHEDULE, sched_default, selector.EntitySelectorConfig(domain="schedule"))
+    )
     schema_dict[vol.Required(
         CONF_OVERRIDE_WEATHER,
         default=d.get(CONF_OVERRIDE_WEATHER, False),
     )] = selector.BooleanSelector()
-
-    if weather_default:
-        schema_dict[vol.Optional(CONF_WEATHER, default=weather_default)] = (
-            selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="weather")
-            )
-        )
-    else:
-        schema_dict[vol.Optional(CONF_WEATHER)] = selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="weather")
-        )
+    schema_dict.update(
+        _optional_entity(CONF_WEATHER, weather_default, selector.EntitySelectorConfig(domain="weather"))
+    )
 
     schema_dict.update({
         vol.Required(
@@ -457,7 +458,7 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional(CONF_BOILER_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(
-                            domain=["climate", "switch", "input_boolean"]
+                            domain=["climate", "switch", "input_boolean", "water_heater"]
                         )
                     ),
                     vol.Optional(
@@ -542,7 +543,7 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         has_area = bool(self._area_id)
 
         schema: dict = {
-            vol.Required(CONF_NAME, default=default_name): str,
+            vol.Required(CONF_NAME, default=default_name): selector.TextSelector(),
         }
 
         if has_area:
@@ -550,9 +551,9 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             temp_ids = d.get("temp_ids", [])
             window_ids = d.get("window_ids", [])
 
-            # Heaters: area-filtered EntitySelector, no pre-selection
+            # Heaters: area-filtered, pre-select all discovered entities
             if heater_ids:
-                schema[vol.Required(CONF_HEATER_ENTITIES)] = selector.EntitySelector(
+                schema[vol.Required(CONF_HEATER_ENTITIES, default=heater_ids)] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         include_entities=heater_ids,
                         multiple=True,
@@ -706,86 +707,27 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             ),
         }
 
-        # Entity selectors — only set default if we have a valid value
-        presence = current.get(CONF_PRESENCE_SENSORS)
-        if presence:
-            schema_dict[
-                vol.Optional(CONF_PRESENCE_SENSORS, default=presence)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="person", multiple=True)
-            )
-        else:
-            schema_dict[vol.Optional(CONF_PRESENCE_SENSORS)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="person", multiple=True
-                    )
-                )
-            )
-
-        schedule = current.get(CONF_SCHEDULE)
-        if schedule:
-            schema_dict[
-                vol.Optional(CONF_SCHEDULE, default=schedule)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="schedule")
-            )
-        else:
-            schema_dict[vol.Optional(CONF_SCHEDULE)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="schedule")
-                )
-            )
-
-        weather = current.get(CONF_WEATHER)
-        if weather:
-            schema_dict[
-                vol.Optional(CONF_WEATHER, default=weather)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="weather")
-            )
-        else:
-            schema_dict[vol.Optional(CONF_WEATHER)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="weather")
-                )
-            )
-
-        override_sw = current.get(CONF_OVERRIDE_SWITCH)
-        if override_sw:
-            schema_dict[
-                vol.Optional(CONF_OVERRIDE_SWITCH, default=override_sw)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=["input_boolean", "switch"]
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_OVERRIDE_SWITCH)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain=["input_boolean", "switch"]
-                    )
-                )
-            )
-
-        vacation_entity = current.get(CONF_VACATION_ENTITY)
-        if vacation_entity:
-            schema_dict[
-                vol.Optional(CONF_VACATION_ENTITY, default=vacation_entity)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=["input_boolean", "binary_sensor"]
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_VACATION_ENTITY)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain=["input_boolean", "binary_sensor"]
-                    )
-                )
-            )
+        # Entity selectors — _optional_entity avoids passing default=None
+        schema_dict.update(_optional_entity(
+            CONF_PRESENCE_SENSORS, current.get(CONF_PRESENCE_SENSORS),
+            selector.EntitySelectorConfig(domain="person", multiple=True),
+        ))
+        schema_dict.update(_optional_entity(
+            CONF_SCHEDULE, current.get(CONF_SCHEDULE),
+            selector.EntitySelectorConfig(domain="schedule"),
+        ))
+        schema_dict.update(_optional_entity(
+            CONF_WEATHER, current.get(CONF_WEATHER),
+            selector.EntitySelectorConfig(domain="weather"),
+        ))
+        schema_dict.update(_optional_entity(
+            CONF_OVERRIDE_SWITCH, current.get(CONF_OVERRIDE_SWITCH),
+            selector.EntitySelectorConfig(domain=["input_boolean", "switch"]),
+        ))
+        schema_dict.update(_optional_entity(
+            CONF_VACATION_ENTITY, current.get(CONF_VACATION_ENTITY),
+            selector.EntitySelectorConfig(domain=["input_boolean", "binary_sensor"]),
+        ))
 
         schema_dict[
             vol.Optional(
@@ -828,21 +770,12 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             )
         )
 
-        boiler = current.get(CONF_BOILER_ENTITY)
-        if boiler:
-            schema_dict[
-                vol.Optional(CONF_BOILER_ENTITY, default=boiler)
-            ] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=["climate", "switch", "input_boolean"]
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_BOILER_ENTITY)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=["climate", "switch", "input_boolean"]
-                )
-            )
+        schema_dict.update(_optional_entity(
+            CONF_BOILER_ENTITY, current.get(CONF_BOILER_ENTITY),
+            selector.EntitySelectorConfig(
+                domain=["climate", "switch", "input_boolean", "water_heater"]
+            ),
+        ))
 
         schema_dict[
             vol.Optional(
@@ -865,44 +798,26 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         annual_data = current.get(CONF_ENERGY_ANNUAL_DATA) or {}
         current_year_kwh = annual_data.get(current_year)
 
+        price_sel = selector.NumberSelector(selector.NumberSelectorConfig(
+            min=0.01, max=2.0, step=0.01,
+            unit_of_measurement="€/kWh",
+            mode=selector.NumberSelectorMode.BOX,
+        ))
         price = current.get(CONF_ENERGY_PRICE_KWH)
         if price:
-            schema_dict[
-                vol.Optional(CONF_ENERGY_PRICE_KWH, default=float(price))
-            ] = selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.01, max=2.0, step=0.01,
-                    unit_of_measurement="€/kWh",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            )
+            schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH, default=float(price))] = price_sel
         else:
-            schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH)] = selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.01, max=2.0, step=0.01,
-                    unit_of_measurement="€/kWh",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            )
+            schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH)] = price_sel
 
+        kwh_sel = selector.NumberSelector(selector.NumberSelectorConfig(
+            min=100, max=100000, step=100,
+            unit_of_measurement="kWh",
+            mode=selector.NumberSelectorMode.BOX,
+        ))
         if current_year_kwh:
-            schema_dict[
-                vol.Optional(CONF_ENERGY_KWH_THIS_YEAR, default=float(current_year_kwh))
-            ] = selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=100, max=100000, step=100,
-                    unit_of_measurement="kWh/anno",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            )
+            schema_dict[vol.Optional(CONF_ENERGY_KWH_THIS_YEAR, default=float(current_year_kwh))] = kwh_sel
         else:
-            schema_dict[vol.Optional(CONF_ENERGY_KWH_THIS_YEAR)] = selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=100, max=100000, step=100,
-                    unit_of_measurement="kWh/anno",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            )
+            schema_dict[vol.Optional(CONF_ENERGY_KWH_THIS_YEAR)] = kwh_sel
 
         return self.async_show_form(
             step_id="global",
@@ -934,7 +849,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         schema_dict: dict = {
             vol.Required(
                 CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)
-            ): str,
+            ): selector.TextSelector(),
         }
 
         if area_id:
