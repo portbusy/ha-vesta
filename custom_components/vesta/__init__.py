@@ -44,10 +44,9 @@ class BoilerCoordinator:
         any_heating = False
 
         for room in rooms:
-            # Use the idempotence trackers that climate.py maintains
-            switch_on = getattr(room, "_last_heater_state", None) or False
-            climate_active = getattr(room, "_last_climate_active", None) or False
-            if switch_on or climate_active:
+            # Use the per-entity state dict that climate.py maintains
+            heater_states = getattr(room, "_heater_states", {})
+            if any(heater_states.values()):
                 any_heating = True
                 target = getattr(room, "_target_temp", None) or room.comfort_temp
                 active_setpoints.append(float(target))

@@ -201,11 +201,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # Manual override pause (away while in manual)
         self._manual_paused_for_away: bool = False
 
-        # Safety & Fail-safe state
-        self._last_heater_state: bool | None = None   # switch/water_heater bang-bang
-        self._last_climate_active: bool | None = None  # climate entity setpoint mode
-        self._last_target_temp: float | None = None
-        self._last_heater_cmd_time: float = 0.0       # fix 1: TRV command grace period
+        # Safety & Fail-safe state — per-entity trackers so rooms with multiple
+        # heaters (two TRVs, TRV+switch, AC+radiator…) are handled correctly.
+        # Each entity has its own idempotence state; one going offline or rounding
+        # its setpoint differently does not affect the others.
+        self._heater_states: dict[str, bool] = {}          # entity_id → active
+        self._heater_targets: dict[str, float | None] = {} # entity_id → target (climate only)
+        self._last_heater_cmd_time: float = 0.0            # grace period after any climate cmd
         self._last_external_override_time: float = 0.0  # fix 4: multi-TRV debounce
         self._manual_start_time: float | None = None
         self._hardware_failure = False
@@ -333,7 +335,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return
         self._last_external_override_time = time.time()  # debounce multi-TRV
         self._target_temp = temp
-        self._last_target_temp = temp  # prevent immediate re-trigger
+        # Sync all climate entities' known targets so none triggers a second override
+        for eid in self._heaters:
+            if eid.split(".")[0] == "climate":
+                self._heater_targets[eid] = temp
         self._preset_mode = MODE_MANUAL
         self._force_return = False
         self._manual_start_time = time.time()
@@ -363,15 +368,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     ) -> float:
         """Estimate combined heating power fraction [0.0-1.0] across all heaters.
 
-        Switches contribute binary 0/1. Climate entities (TRVs) contribute a
-        valve-openness fraction derived from their internal temperature sensor:
-        fully open when ≥2°C below target, closed when at or above target.
-        Falls back to binary climate_active when the TRV has no temperature data.
+        Each entity uses its own state from _heater_states so that a single
+        offline TRV does not flatten the contribution of the other heaters.
+        Climate entities contribute a valve-openness fraction; switches are binary.
         """
         contributions: list[float] = []
         for eid in self._heaters:
+            is_active = self._heater_states.get(eid, False)
             if eid.split(".")[0] == "climate":
-                if not climate_active:
+                if not is_active:
                     contributions.append(0.0)
                     continue
                 state = self.hass.states.get(eid)
@@ -385,7 +390,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 else:
                     contributions.append(1.0)
             else:
-                contributions.append(1.0 if switch_on else 0.0)
+                contributions.append(1.0 if is_active else 0.0)
         return sum(contributions) / len(contributions) if contributions else 0.0
 
     def _check_daily_reset(self) -> None:
@@ -779,58 +784,58 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         switch_on: bool,
         climate_active: bool,
         target_temp: float | None = None,
-    ):
-        # --- Idempotence checks ---
-        switch_state_changed = self._last_heater_state != switch_on
-        climate_state_changed = self._last_climate_active != climate_active
-        climate_target_changed = (
-            climate_active
-            and target_temp is not None
-            and target_temp != self._last_target_temp
-        )
+    ) -> None:
+        """Send commands to heater entities with per-entity idempotence.
 
-        if not switch_state_changed and not climate_state_changed and not climate_target_changed:
-            return
+        Each entity is compared against its own last-known state, so one TRV
+        going offline or reporting a rounded setpoint does not cause spurious
+        re-commands to the other heaters in the room.
 
-        # Update trackers before issuing commands
-        if switch_state_changed:
-            self._last_heater_state = switch_on
-        if climate_state_changed:
-            self._last_climate_active = climate_active
-        if not climate_active:
-            self._last_target_temp = None
-        elif target_temp is not None:
-            self._last_target_temp = target_temp
+        Climate entities (TRVs, heat-pump ACs) use setpoint mode.
+        Switches and other simple heaters use bang-bang control.
+        """
+        any_climate_cmd = False
 
         for eid in self._heaters:
             domain = eid.split(".")[0]
             if domain == "climate":
-                # Setpoint mode: keep in heat mode while heating is desired and let
-                # the TRV/AC manage its valve internally. Only turn off when Vesta
-                # explicitly wants no heating (vacation, schedule off, window open…).
-                if climate_state_changed:
+                prev_active = self._heater_states.get(eid)
+                prev_target = self._heater_targets.get(eid)
+                state_changed = prev_active != climate_active
+                target_changed = (
+                    climate_active
+                    and target_temp is not None
+                    and prev_target != target_temp
+                )
+                if state_changed:
+                    self._heater_states[eid] = climate_active
+                    if not climate_active:
+                        self._heater_targets[eid] = None
                     await self.hass.services.async_call(
                         "climate",
                         "set_hvac_mode",
                         {"entity_id": eid, "hvac_mode": "heat" if climate_active else "off"},
                     )
-                if climate_active and target_temp is not None and (
-                    climate_state_changed or climate_target_changed
-                ):
+                if climate_active and target_temp is not None and (state_changed or target_changed):
+                    self._heater_targets[eid] = target_temp
+                    any_climate_cmd = True
                     await self.hass.services.async_call(
                         "climate",
                         "set_temperature",
                         {"entity_id": eid, "temperature": target_temp},
                     )
-                    self._last_heater_cmd_time = time.time()
             else:
-                # Bang-bang for switches and other simple heaters
-                if switch_state_changed:
+                prev_active = self._heater_states.get(eid)
+                if prev_active != switch_on:
+                    self._heater_states[eid] = switch_on
                     await self.hass.services.async_call(
                         "homeassistant",
                         "turn_on" if switch_on else "turn_off",
                         {"entity_id": eid},
                     )
+
+        if any_climate_cmd:
+            self._last_heater_cmd_time = time.time()
 
     # Standard HA Boilerplate & Dynamic Properties
     @property
@@ -1228,18 +1233,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         pass
         self._cur_temp = self._compute_cur_temp()
 
-        # Initialise heater state from reality to avoid a spurious command at startup
-        if self._heaters:
-            self._last_heater_state = any(
-                self._heater_active(self.hass.states.get(eid))
-                for eid in self._heaters
-                if eid.split(".")[0] != "climate"
-            )
-            self._last_climate_active = any(
-                self._heater_active(self.hass.states.get(eid))
-                for eid in self._heaters
-                if eid.split(".")[0] == "climate"
-            )
+        # Initialise per-entity heater state from reality to avoid spurious
+        # commands at startup and correctly handle rooms with multiple heaters.
+        self._heater_states = {}
+        self._heater_targets = {}
+        for eid in self._heaters:
+            state = self.hass.states.get(eid)
+            self._heater_states[eid] = self._heater_active(state)
+            if eid.split(".")[0] == "climate":
+                t = state.attributes.get("temperature") if state else None
+                self._heater_targets[eid] = float(t) if t is not None else None
 
         self._last_usage_reset_date = dt_util.now().date()
 
@@ -1369,35 +1372,39 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @callback
     def _on_heater_change(self, event):
-        """Update internal state if a heater is changed externally."""
+        """Update per-entity state when a heater changes externally."""
         s = event.data.get("new_state")
-        if s:
-            domain = s.entity_id.split(".")[0]
-            if domain == "climate":
-                self._last_climate_active = self._heater_active(s)
-                # Detect temperature change made directly on TRV or via external app.
-                # Grace periods prevent false positives from:
-                #   - TRV rounding (e.g. Tado 0.5°C steps) after a Vesta command
-                #   - Stale state reports from a second TRV right after another TRV changed
-                trv_target = s.attributes.get("temperature")
-                if trv_target is not None and self._last_target_temp is not None:
-                    try:
-                        trv_temp = float(trv_target)
-                        diff = abs(trv_temp - self._last_target_temp)
-                        if diff > 0.1:
-                            now = time.time()
-                            in_cmd_grace = (now - self._last_heater_cmd_time) < 60
-                            in_ext_grace = (now - self._last_external_override_time) < 30
-                            if in_cmd_grace or in_ext_grace:
-                                # Accept TRV's rounded/acknowledged value
-                                self._last_target_temp = trv_temp
-                            else:
-                                self._handle_external_temp_override(trv_temp)
-                    except (ValueError, TypeError):
-                        pass
-            else:
-                self._last_heater_state = self._heater_active(s)
-            self.async_write_ha_state()
+        if not s:
+            return
+        eid = s.entity_id
+        self._heater_states[eid] = self._heater_active(s)
+
+        if eid.split(".")[0] == "climate":
+            # Detect temperature change made directly on TRV or via an external app.
+            # Compare against this entity's own known target so that a second TRV
+            # reporting a different (rounded) value does not trigger a false override.
+            # Grace periods prevent false positives from:
+            #   - TRV rounding (e.g. Tado 0.5°C steps) after a Vesta command
+            #   - Stale state reports arriving right after another TRV changed
+            trv_target = s.attributes.get("temperature")
+            known_target = self._heater_targets.get(eid)
+            if trv_target is not None and known_target is not None:
+                try:
+                    trv_temp = float(trv_target)
+                    diff = abs(trv_temp - known_target)
+                    if diff > 0.1:
+                        now = time.time()
+                        in_cmd_grace = (now - self._last_heater_cmd_time) < 60
+                        in_ext_grace = (now - self._last_external_override_time) < 30
+                        if in_cmd_grace or in_ext_grace:
+                            # Accept TRV's rounded/acknowledged value for this entity only
+                            self._heater_targets[eid] = trv_temp
+                        else:
+                            self._handle_external_temp_override(trv_temp)
+                except (ValueError, TypeError):
+                    pass
+
+        self.async_write_ha_state()
 
     @callback
     def _on_sensor(self, event):
