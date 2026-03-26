@@ -191,6 +191,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._monthly_hdh_away: float = 0.0
         self._monthly_hdh_window: float = 0.0
         self._monthly_hdh_eco: float = 0.0
+        # Total eligible tracking hours this month (denominator for savings fraction)
+        self._monthly_hdh_base: float = 0.0
 
         # Companion sensor entities (set by sensor platform after climate setup)
         self._companion_sensors: list = []
@@ -274,6 +276,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "_monthly_hdh_away": self._monthly_hdh_away,
             "_monthly_hdh_window": self._monthly_hdh_window,
             "_monthly_hdh_eco": self._monthly_hdh_eco,
+            "_monthly_hdh_base": self._monthly_hdh_base,
             "_last_savings_reset_month": self._last_savings_reset_month,
         }
         attrs.update(self._compute_savings_est())
@@ -399,6 +402,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._monthly_hdh_away = 0.0
             self._monthly_hdh_window = 0.0
             self._monthly_hdh_eco = 0.0
+            self._monthly_hdh_base = 0.0
             self._last_savings_reset_month = month
 
         if self._last_usage_reset_date != today:
@@ -536,15 +540,19 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             if not frost_risk and self._hvac_mode == HVACMode.HEAT:
                 comfort = self.comfort_temp
                 outdoor = self._outdoor_temp
-                # HDH factor: how much of the base ΔT (comfort - outdoor) was saved
-                # this tick. Integrated over time so the estimate reflects actual
-                # outdoor conditions rather than a single snapshot at report time.
+                # HDH factor: fraction of potential heat loss saved this tick.
+                # Accumulated over time with actual outdoor conditions so the
+                # monthly estimate integrates real weather rather than a snapshot.
+                # hdh_base counts eligible ticks and is the denominator in
+                # _compute_savings_est, making the formula independent of season length.
+                self._monthly_hdh_base += 1.0 / 60
                 if outdoor is not None and comfort > outdoor:
                     base_delta = max(1.0, comfort - outdoor)
                     hdh_away_tick = (comfort - self.away_temp) / base_delta / 60
                     hdh_window_tick = (comfort - ANTI_FROST_TEMP) / base_delta / 60
                 else:
-                    # Fraunhofer fallback ratios when outdoor temp is unavailable
+                    # Fallback fractions when outdoor temp is unavailable
+                    # (based on typical EU heating season: comfort=20, away=17, outdoor=7)
                     hdh_away_tick = 0.23 / 60
                     hdh_window_tick = 1.0 / 60
 
@@ -720,9 +728,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     def _compute_savings_est(self) -> dict[str, Any]:
         """Estimate monthly kWh/€ savings using the Heating Degree Hours method.
 
-        HDH values are accumulated at each scheduled tick using the actual outdoor
-        temperature at that moment, so the estimate integrates real conditions over
-        the month rather than applying a single end-of-period snapshot factor.
+        HDH feature values (away/eco/window) are accumulated each tick as
+        (ΔT_saved / ΔT_base) / 60, where ΔT_base = comfort - outdoor.
+        _monthly_hdh_base counts all eligible ticks as 1/60 each (total tracking hours).
+
+        saved_fraction = (hdh_away + hdh_eco + hdh_window) / hdh_base
+        saved_kwh = saved_fraction × (annual_kwh / 12)
+
+        This formulation is independent of season length: in summer hdh_base ≈ 0
+        so no savings are reported; in winter the fraction correctly captures
+        what portion of the month's heating budget the smart features avoided.
         """
         g = self.hass.data[DOMAIN].get("global")
         if not g:
@@ -730,21 +745,22 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         price = g.data.get(CONF_ENERGY_PRICE_KWH)
         annual_data = g.data.get(CONF_ENERGY_ANNUAL_DATA) or {}
         annual_kwh = annual_data.get(str(dt_util.now().year))
-        if not annual_kwh or not price:
+        if not annual_kwh or not price or self._monthly_hdh_base <= 0:
             return {}
 
-        kwh_per_hour = float(annual_kwh) / 8760
-        price = float(price)
-
-        saved_kwh = (
+        hdh_saved = (
             self._monthly_hdh_away
             + self._monthly_hdh_eco
             + self._monthly_hdh_window
-        ) * kwh_per_hour
+        )
+        saved_fraction = min(hdh_saved / self._monthly_hdh_base, 1.0)
+        saved_kwh = saved_fraction * float(annual_kwh) / 12
+        price = float(price)
 
         return {
             ATTR_SAVINGS_KWH_MONTH: round(saved_kwh, 2),
             ATTR_SAVINGS_EUR_MONTH: round(saved_kwh * price, 2),
+            "savings_pct_month": round(saved_fraction * 100, 1),
         }
 
     @staticmethod
@@ -1157,6 +1173,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._monthly_hdh_away = float(old.attributes.get("_monthly_hdh_away", 0.0))
             self._monthly_hdh_window = float(old.attributes.get("_monthly_hdh_window", 0.0))
             self._monthly_hdh_eco = float(old.attributes.get("_monthly_hdh_eco", 0.0))
+            self._monthly_hdh_base = float(old.attributes.get("_monthly_hdh_base", 0.0))
             self._last_savings_reset_month = old.attributes.get(
                 "_last_savings_reset_month"
             )

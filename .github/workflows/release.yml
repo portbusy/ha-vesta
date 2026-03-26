@@ -40,7 +40,14 @@ jobs:
       - name: Generate release notes
         run: git-cliff --config cliff.toml --latest --strip header -o RELEASE_NOTES.md
 
+      - name: Create integration zip
+        run: |
+          cd custom_components
+          zip -r ../vesta.zip vesta/
+          cd ..
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: RELEASE_NOTES.md
+          files: vesta.zip
