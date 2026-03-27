@@ -1,7 +1,10 @@
 {
   "domain": "vesta",
   "name": "Vesta",
-  "after_dependencies": ["http", "panel_custom"],
+  "after_dependencies": [
+    "http",
+    "panel_custom"
+  ],
   "codeowners": [
     "@portbusy"
   ],
