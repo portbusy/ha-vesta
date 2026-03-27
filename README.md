@@ -18,6 +18,7 @@ Think of it as the brains Tado and similar systems provide, but running entirely
   - [Weather compensation](#weather-compensation)
   - [Hardware failure detection](#hardware-failure-detection)
 - [Features](#features)
+- [Vesta Schedule Panel](#vesta-schedule-panel)
 - [Schedule block additional data](#schedule-block-additional-data)
 - [Preset modes](#preset-modes)
 - [Manual override revert modes](#manual-override-revert-modes)
@@ -69,6 +70,28 @@ If the heater has been running at full power for 45 minutes but the room tempera
 - **Energy savings tracking** — Each room exposes dedicated sensor entities for heating time and hours saved per feature (away mode, window detection, eco schedule). When energy consumption and price are configured in Global Settings, Vesta also estimates monthly kWh and cost savings.
 - **Boiler coordinator** — Optionally link a central boiler entity (climate, switch, or input_boolean) in Global Settings. Vesta monitors all rooms and turns the boiler on whenever any room calls for heat. For climate boilers, Vesta also sets the flow temperature: the highest active room setpoint plus a configurable offset (default 5°C), clamped at 80°C. No external automation needed.
 - **Window open delay** — Per-room configurable delay (in minutes) before an open window suppresses heating. Useful for underfloor heating systems where brief ventilation should not interrupt a long heating cycle. Default is 0 (immediate suppression).
+
+---
+
+## Vesta Schedule Panel
+
+Vesta includes a built-in visual schedule editor accessible directly from the Home Assistant sidebar (look for the **Vesta** entry with the thermometer icon).
+
+### Features
+
+- **Weekly grid view** — all 7 days side-by-side, 24-hour time axis with colour-coded blocks
+- **Mobile view** — single-day view with left/right navigation arrows
+- **Block modes** — each block supports all Vesta modes: Comfort, Eco, Away, Frost, Off, or a custom temperature
+- **No overlaps** — overlapping blocks are rejected with an error message; Vesta never silently discards data
+- **Templates** — start from a pre-built template (Standard Italy, Morning & Evening, Evening Only, Always Eco) or a blank schedule
+- **Multiple schedules** — create as many named schedules as you want
+- **Duplicate** — copy any schedule to use as a starting point for a new one
+- **Room assignments** — the Rooms tab lets you assign any schedule to specific rooms. Unassigned rooms automatically inherit the global schedule
+- **Global schedule** — set a Vesta-native schedule as the global default directly from the panel
+
+### How it relates to HA Schedule helpers
+
+Vesta Schedules are an **alternative** to Home Assistant's built-in Schedule helpers. You can mix both: some rooms can use a HA schedule entity (configured as before in the room's options), while others use a Vesta schedule. All manual override and revert modes work identically regardless of which schedule source is active.
 
 ---
 

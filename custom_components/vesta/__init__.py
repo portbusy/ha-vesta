@@ -8,6 +8,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, CONF_ENTRY_TYPE, ENTRY_TYPE_GLOBAL, CONF_BOILER_ENTITY, CONF_BOILER_OFFSET
+from .store import ScheduleStore
+from .api import async_setup_api
+from .panel import async_setup_panel
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[str] = ["climate", "sensor"]
@@ -110,8 +113,24 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Vesta component."""
     hass.data.setdefault(
         DOMAIN,
-        {"global": None, "rooms": [], "climate_entities_by_entry": {}, "boiler_coordinator": None},
+        {
+            "global": None,
+            "rooms": [],
+            "climate_entities_by_entry": {},
+            "boiler_coordinator": None,
+            "schedule_store": None,
+        },
     )
+
+    # Initialize persistent schedule store
+    store = ScheduleStore(hass)
+    await store.async_load()
+    hass.data[DOMAIN]["schedule_store"] = store
+
+    # Register WebSocket API and sidebar panel
+    async_setup_api(hass)
+    await async_setup_panel(hass)
+
     return True
 
 
@@ -119,10 +138,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Vesta entry."""
     hass.data.setdefault(
         DOMAIN,
-        {"global": None, "rooms": [], "climate_entities_by_entry": {}, "boiler_coordinator": None},
+        {
+            "global": None,
+            "rooms": [],
+            "climate_entities_by_entry": {},
+            "boiler_coordinator": None,
+            "schedule_store": None,
+        },
     )
     hass.data[DOMAIN].setdefault("climate_entities_by_entry", {})
     hass.data[DOMAIN].setdefault("boiler_coordinator", None)
+    hass.data[DOMAIN].setdefault("schedule_store", None)
 
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_GLOBAL:
         hass.data[DOMAIN]["global"] = entry

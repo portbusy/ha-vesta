@@ -89,3 +89,9 @@ MODE_SMART_SCHEDULE = "smart_schedule"
 MODE_MANUAL = "manual"
 MODE_AWAY = "away"
 MODE_VACATION = "vacation"
+
+# Vesta Native Schedules
+CONF_SCHEDULE_SOURCE = "schedule_source"
+CONF_VESTA_SCHEDULE_ID = "vesta_schedule_id"
+SCHEDULE_SOURCE_ENTITY = "entity"
+SCHEDULE_SOURCE_VESTA = "vesta"

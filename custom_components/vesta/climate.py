@@ -84,6 +84,9 @@ from .const import (
     SEASON_OFFMODE_OPEN,
     SEASON_OFFMODE_FROST,
     SEASON_OFFMODE_OFF,
+    CONF_SCHEDULE_SOURCE,
+    CONF_VESTA_SCHEDULE_ID,
+    SCHEDULE_SOURCE_VESTA,
     CONF_ENERGY_PRICE_KWH,
     CONF_ENERGY_ANNUAL_DATA,
     ATTR_SAVED_AWAY_H_TODAY,
@@ -318,6 +321,63 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         elapsed = (time.time() - self._manual_start_time) / 60
         return max(0, int((self._get_manual_override_hours() * 60) - elapsed))
 
+    def _resolve_schedule_source(self) -> tuple[str | None, str | None]:
+        """Return (source_type, ref) for the effective schedule.
+
+        source_type: "entity" | "vesta" | None
+        ref: entity_id (for "entity") or schedule UUID (for "vesta"), or None
+        """
+        g = self.hass.data[DOMAIN].get("global")
+        # Room override: room has its own HA entity schedule
+        if self._entry.data.get(CONF_OVERRIDE_SCHEDULE):
+            sched_id = self._entry.data.get(CONF_SCHEDULE)
+            return ("entity", sched_id) if sched_id else (None, None)
+        # Room-level Vesta schedule override
+        if self._entry.data.get(CONF_SCHEDULE_SOURCE) == SCHEDULE_SOURCE_VESTA:
+            sched_id = self._entry.data.get(CONF_VESTA_SCHEDULE_ID)
+            return ("vesta", sched_id) if sched_id else (None, None)
+        if not g:
+            return (None, None)
+        # Global Vesta schedule
+        if g.data.get(CONF_SCHEDULE_SOURCE) == SCHEDULE_SOURCE_VESTA:
+            sched_id = g.data.get(CONF_VESTA_SCHEDULE_ID)
+            return ("vesta", sched_id) if sched_id else (None, None)
+        # Global HA entity schedule (default)
+        sched_id = g.data.get(CONF_SCHEDULE)
+        return ("entity", sched_id) if sched_id else (None, None)
+
+    def _get_vesta_schedule_mode(self, schedule_id: str) -> str:
+        """Return the active mode string for the given Vesta schedule right now."""
+        store = self.hass.data[DOMAIN].get("schedule_store")
+        if not store:
+            return "off"
+        now = dt_util.now()
+        return store.get_current_mode(schedule_id, now.weekday(), now.strftime("%H:%M"))
+
+    def _apply_vesta_schedule_mode(self, mode: str) -> None:
+        """Apply a Vesta schedule mode string to internal state."""
+        if mode == "off":
+            self._hvac_mode = HVACMode.OFF
+            return
+        # Ensure heating is on for any active mode
+        if self._hvac_mode == HVACMode.OFF:
+            self._hvac_mode = HVACMode.HEAT
+        mode_map = {
+            "comfort": self.comfort_temp,
+            "eco": self.eco_temp,
+            "away": self.away_temp,
+            "frost": ANTI_FROST_TEMP,
+        }
+        if mode in mode_map:
+            self._target_temp = mode_map[mode]
+        elif mode.startswith("temp:"):
+            try:
+                self._target_temp = float(mode.split(":", 1)[1])
+            except ValueError:
+                self._target_temp = self.comfort_temp
+        else:
+            self._target_temp = self.eco_temp
+
     def _record_schedule_state_for_override(self) -> None:
         """Snapshot the current schedule state so schedule-based revert modes can detect transitions."""
         mode = self._get_manual_override_mode()
@@ -328,14 +388,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         ):
             self._schedule_state_at_override = None
             return
-        g = self.hass.data[DOMAIN].get("global")
-        sched_id = (
-            self._entry.data.get(CONF_SCHEDULE)
-            if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
-            else (g.data.get(CONF_SCHEDULE) if g else None)
-        )
-        if sched_id and (s := self.hass.states.get(sched_id)):
-            self._schedule_state_at_override = s.state
+        source_type, sched_ref = self._resolve_schedule_source()
+        if source_type == "vesta" and sched_ref:
+            # For Vesta schedules, snapshot the current mode string
+            self._schedule_state_at_override = self._get_vesta_schedule_mode(sched_ref)
+        elif source_type == "entity" and sched_ref:
+            if s := self.hass.states.get(sched_ref):
+                self._schedule_state_at_override = s.state
+            else:
+                self._schedule_state_at_override = None
         else:
             self._schedule_state_at_override = None
 
@@ -1022,14 +1083,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             else:
                 self._heating_season_active = bool(season_status)
 
-        # 2. Schedule Logic: HA schedule entity
-        sched_id = (
-            self._entry.data.get(CONF_SCHEDULE)
-            if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
-            else g.data.get(CONF_SCHEDULE)
-        )
-        if sched_id and (s_state := self.hass.states.get(sched_id)):
-            # Schedule-based manual revert (next_schedule / next_schedule_on / timer_or_schedule)
+        # 2. Schedule Logic: dual-source (HA entity or Vesta native schedule)
+        source_type, sched_ref = self._resolve_schedule_source()
+
+        if source_type == "entity" and sched_ref and (s_state := self.hass.states.get(sched_ref)):
+            # -- HA entity schedule: manual revert detection --
             if (
                 self._preset_mode == MODE_MANUAL
                 and self._schedule_state_at_override is not None
@@ -1051,36 +1109,61 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._force_return = False
                     self._schedule_state_at_override = None
 
-        if self._preset_mode != MODE_MANUAL:
-            if sched_id and (s_state := self.hass.states.get(sched_id)):
+            if self._preset_mode != MODE_MANUAL:
                 if self._preset_mode == MODE_AWAY:
-                    # In away mode the schedule cannot override temperature or turn
-                    # off heating. Restore hvac_mode if a previous schedule block
-                    # had turned it off.
                     if self._hvac_mode == HVACMode.OFF:
                         self._hvac_mode = HVACMode.HEAT
                 else:
-                    block_data = self._get_current_schedule_block_data(sched_id)
-
-                    # Controlla se il blocco richiede spegnimento
+                    block_data = self._get_current_schedule_block_data(sched_ref)
                     mode = str((block_data or {}).get("mode", "")).lower().strip()
                     if mode == "off":
                         self._hvac_mode = HVACMode.OFF
                     else:
-                        # Riattiva se era stato spento dallo schedule
                         if self._hvac_mode == HVACMode.OFF:
                             self._hvac_mode = HVACMode.HEAT
-
                         parsed_temp = self._parse_schedule_block_data(block_data)
                         if parsed_temp is not None:
                             self._target_temp = parsed_temp
                         else:
-                            # Fallback classico: on = comfort, off = eco
                             self._target_temp = (
                                 self.comfort_temp
                                 if s_state.state == STATE_ON
                                 else self.eco_temp
                             )
+
+        elif source_type == "vesta" and sched_ref:
+            # -- Vesta native schedule --
+            vesta_mode = self._get_vesta_schedule_mode(sched_ref)
+
+            # Manual revert detection: compare mode string
+            if (
+                self._preset_mode == MODE_MANUAL
+                and self._schedule_state_at_override is not None
+                and vesta_mode != self._schedule_state_at_override
+            ):
+                ovr_mode = self._get_manual_override_mode()
+                should_revert = (
+                    ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
+                    or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
+                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and vesta_mode == "comfort")
+                )
+                if should_revert:
+                    _LOGGER.info(
+                        "Vesta schedule changed for %s: reverting manual override (%s).",
+                        self._name,
+                        ovr_mode,
+                    )
+                    self._preset_mode = MODE_SMART_SCHEDULE
+                    self._force_return = False
+                    self._schedule_state_at_override = None
+
+            if self._preset_mode != MODE_MANUAL:
+                if self._preset_mode == MODE_AWAY:
+                    # Away mode cannot be overridden by schedule; ensure heating stays on
+                    if self._hvac_mode == HVACMode.OFF:
+                        self._hvac_mode = HVACMode.HEAT
+                else:
+                    self._apply_vesta_schedule_mode(vesta_mode)
 
         # 3. Presence & Geofencing
         presence_ids = (
@@ -1376,11 +1459,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
-        sched_id = (
-            self._entry.data.get(CONF_SCHEDULE)
-            if self._entry.data.get(CONF_OVERRIDE_SCHEDULE)
-            else (g.data.get(CONF_SCHEDULE) if g else None)
-        )
+        # Only subscribe to HA entity schedule state changes.
+        # Vesta native schedules are checked every minute via the tick loop — no listener needed.
+        source_type, sched_ref = self._resolve_schedule_source()
+        sched_id = sched_ref if source_type == "entity" else None
         if sched_id:
             self._event_listeners.append(
                 async_track_state_change_event(
