@@ -8,5 +8,6 @@
   "documentation": "https://github.com/portbusy/ha-vesta",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/portbusy/ha-vesta/issues",
+  "after_dependencies": ["http", "panel_custom"],
   "version": "1.4.0"
 }
