@@ -70,6 +70,9 @@
           "override_switch": "Emergency Heat Override",
           "vacation_entity": "Vacation Mode Entity",
           "vacation_state": "Vacation Mode (static fallback)",
+          "heating_season_entity": "Heating Season Entity",
+          "heating_season_active": "Heating Season Active (static fallback)",
+          "heating_season_offmode": "Off-Season Heater Behaviour",
           "manual_override_mode": "Manual Override Revert Mode",
           "manual_override_hours": "Manual Override Timer Duration",
           "boiler_entity": "Boiler Entity",
@@ -88,6 +91,9 @@
           "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
           "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
           "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
+          "heating_season_entity": "Link an input_boolean or binary_sensor that indicates whether the heating season is active. When OFF, all rooms switch to the off-season behaviour below. Takes priority over the static toggle.",
+          "heating_season_active": "Static fallback: enable to keep heating active when no entity is configured above. Disable to enter off-season mode.",
+          "heating_season_offmode": "What to do with heaters during the off-season. 'Open' exercises TRV valves at maximum setpoint to prevent sticking (recommended). 'Frost' maintains a minimal 7°C setpoint. 'Off' turns everything off completely.",
           "manual_override_mode": "Determines when Vesta reverts to the schedule after a manual temperature change (from the UI, TRV, or external app).",
           "manual_override_hours": "How long to hold the manual temperature before reverting. Only used with Timer and Timer or Schedule modes.",
           "boiler_entity": "The boiler entity Vesta should control directly. When any room calls for heat, Vesta turns the boiler on and sets its flow temperature. Leave empty if you manage the boiler with a separate automation.",
@@ -186,6 +192,9 @@
           "override_switch": "Emergency Heat Override",
           "vacation_entity": "Vacation Mode Entity",
           "vacation_state": "Vacation Mode (static fallback)",
+          "heating_season_entity": "Heating Season Entity",
+          "heating_season_active": "Heating Season Active (static fallback)",
+          "heating_season_offmode": "Off-Season Heater Behaviour",
           "boiler_entity": "Boiler Entity",
           "boiler_offset": "Boiler Flow Temperature Offset",
           "energy_price_kwh": "Energy Price (€/kWh)",
@@ -204,6 +213,9 @@
           "override_switch": "An input_boolean or switch that, when turned on, forces all heaters to maximum heat. Use for emergency cold situations.",
           "vacation_entity": "Link an input_boolean or binary_sensor to control vacation mode dynamically. When ON, all rooms drop to anti-frost temperature. Takes priority over the static toggle below.",
           "vacation_state": "Static fallback: enable if no vacation entity is configured above.",
+          "heating_season_entity": "Link an input_boolean or binary_sensor that indicates whether the heating season is active. When OFF, all rooms switch to the off-season behaviour below. Takes priority over the static toggle.",
+          "heating_season_active": "Static fallback: enable to keep heating active when no entity is configured. Disable to enter off-season mode.",
+          "heating_season_offmode": "What to do with heaters during the off-season. 'Open' exercises TRV valves at maximum setpoint to prevent sticking (recommended). 'Frost' maintains a minimal 7°C setpoint. 'Off' turns everything off completely.",
           "boiler_entity": "The boiler entity Vesta should control directly. When any room calls for heat, Vesta turns the boiler on and sets its flow temperature. Leave empty if you manage the boiler separately.",
           "boiler_offset": "Flow temperature offset above the highest active room setpoint.",
           "manual_override_mode": "Determines when Vesta reverts to the schedule after a manual temperature change.",
@@ -286,6 +298,13 @@
         "on_departure": "On departure — revert to away mode when everyone leaves",
         "permanent": "Permanent — hold until manually changed",
         "timer_or_schedule": "Timer or schedule — whichever comes first"
+      }
+    },
+    "heating_season_offmode": {
+      "options": {
+        "open": "Open — TRV valves fully open (prevents sticking, recommended)",
+        "frost": "Frost protection — maintain 7°C minimal setpoint",
+        "off": "Off — turn heaters completely off"
       }
     }
   }

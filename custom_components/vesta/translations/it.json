@@ -186,6 +186,9 @@
           "override_switch": "Override Emergenza Freddo",
           "vacation_entity": "Entità Modalità Vacanza",
           "vacation_state": "Modalità Vacanza (fallback statico)",
+          "heating_season_entity": "Entità Stagione di Riscaldamento",
+          "heating_season_active": "Stagione di Riscaldamento Attiva (fallback statico)",
+          "heating_season_offmode": "Comportamento Riscaldatori Fuori Stagione",
           "boiler_entity": "Entità Caldaia",
           "boiler_offset": "Offset Temperatura Mandata Caldaia",
           "energy_price_kwh": "Prezzo Energia (€/kWh)",
@@ -204,6 +207,9 @@
           "override_switch": "Un input_boolean o switch che, quando attivato, forza tutti i riscaldatori al massimo. Da usare in caso di emergenza freddo.",
           "vacation_entity": "Collega un input_boolean o binary_sensor per controllare dinamicamente la modalità vacanza. Quando è ON, tutte le stanze scendono alla temperatura antigelo. Ha priorità sul toggle statico qui sotto.",
           "vacation_state": "Fallback statico: attiva solo se non hai configurato un'entità vacanza sopra.",
+          "heating_season_entity": "Collega un input_boolean o binary_sensor che indica se la stagione di riscaldamento è attiva. Quando è OFF, tutte le stanze passano al comportamento fuori stagione. Ha priorità sul toggle statico qui sotto.",
+          "heating_season_active": "Fallback statico: attiva per mantenere il riscaldamento quando non è configurata un'entità. Disattiva per entrare in modalità fuori stagione.",
+          "heating_season_offmode": "Cosa fare con i riscaldatori durante la stagione spenta. 'Aperto' mantiene le valvole TRV al massimo per prevenirne il blocco (consigliato). 'Antigelo' mantiene un setpoint minimo di 7°C. 'Spento' spegne tutto completamente.",
           "boiler_entity": "L'entità caldaia che Vesta deve controllare direttamente. Lascia vuoto se gestisci la caldaia con un'automazione separata.",
           "boiler_offset": "Offset della temperatura di mandata sopra al setpoint più alto tra le stanze attive.",
           "energy_price_kwh": "La tua tariffa elettrica attuale. Usata per stimare il risparmio mensile in euro.",
@@ -286,6 +292,13 @@
         "on_departure": "Alla partenza — passa alla modalità assenza quando tutti escono",
         "permanent": "Permanente — mantieni fino alla prossima modifica manuale",
         "timer_or_schedule": "Timer o programmazione — il primo dei due che si verifica"
+      }
+    },
+    "heating_season_offmode": {
+      "options": {
+        "open": "Aperto — valvole TRV al massimo (previene il blocco, consigliato)",
+        "frost": "Antigelo — setpoint minimo 7°C",
+        "off": "Spento — riscaldatori completamente spenti"
       }
     }
   }

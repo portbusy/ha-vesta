@@ -29,6 +29,12 @@ from .const import (
     CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
     CONF_VACATION_ENTITY,
+    CONF_HEATING_SEASON_ENTITY,
+    CONF_HEATING_SEASON_ACTIVE,
+    CONF_HEATING_SEASON_OFFMODE,
+    SEASON_OFFMODE_OPEN,
+    SEASON_OFFMODE_FROST,
+    SEASON_OFFMODE_OFF,
     CONF_BOILER_ENTITY,
     CONF_BOILER_OFFSET,
     CONF_NAME,
@@ -430,6 +436,27 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(
                         CONF_VACATION_STATE, default=False
                     ): selector.BooleanSelector(),
+                    vol.Optional(CONF_HEATING_SEASON_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["input_boolean", "binary_sensor"]
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_HEATING_SEASON_ACTIVE, default=True
+                    ): selector.BooleanSelector(),
+                    vol.Required(
+                        CONF_HEATING_SEASON_OFFMODE, default=SEASON_OFFMODE_OPEN
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                SEASON_OFFMODE_OPEN,
+                                SEASON_OFFMODE_FROST,
+                                SEASON_OFFMODE_OFF,
+                            ],
+                            translation_key="heating_season_offmode",
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
                     vol.Required(
                         CONF_MANUAL_OVERRIDE_MODE, default=MANUAL_OVERRIDE_TIMER
                     ): selector.SelectSelector(
@@ -735,6 +762,31 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_VACATION_STATE, False),
             )
         ] = selector.BooleanSelector()
+
+        schema_dict.update(_optional_entity(
+            CONF_HEATING_SEASON_ENTITY, current.get(CONF_HEATING_SEASON_ENTITY),
+            selector.EntitySelectorConfig(domain=["input_boolean", "binary_sensor"]),
+        ))
+
+        schema_dict[
+            vol.Optional(
+                CONF_HEATING_SEASON_ACTIVE,
+                default=current.get(CONF_HEATING_SEASON_ACTIVE, True),
+            )
+        ] = selector.BooleanSelector()
+
+        schema_dict[
+            vol.Required(
+                CONF_HEATING_SEASON_OFFMODE,
+                default=current.get(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[SEASON_OFFMODE_OPEN, SEASON_OFFMODE_FROST, SEASON_OFFMODE_OFF],
+                translation_key="heating_season_offmode",
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        )
 
         schema_dict[
             vol.Required(

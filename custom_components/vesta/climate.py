@@ -45,6 +45,9 @@ from .const import (
     CONF_OVERRIDE_SWITCH,
     CONF_VACATION_STATE,
     CONF_VACATION_ENTITY,
+    CONF_HEATING_SEASON_ENTITY,
+    CONF_HEATING_SEASON_ACTIVE,
+    CONF_HEATING_SEASON_OFFMODE,
     CONF_COMFORT_TEMP,
     CONF_ECO_TEMP,
     CONF_AWAY_TEMP,
@@ -76,7 +79,11 @@ from .const import (
     ATTR_NEAREST_DISTANCE,
     ATTR_VACATION_MODE,
     ATTR_EMERGENCY_HEAT,
+    ATTR_HEATING_SEASON,
     ATTR_OUTDOOR_TEMP,
+    SEASON_OFFMODE_OPEN,
+    SEASON_OFFMODE_FROST,
+    SEASON_OFFMODE_OFF,
     CONF_ENERGY_PRICE_KWH,
     CONF_ENERGY_ANNUAL_DATA,
     ATTR_SAVED_AWAY_H_TODAY,
@@ -94,6 +101,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Constants
 ANTI_FROST_TEMP = 5.0
+SEASON_OFF_FROST_TEMP = 7.0
 MANUAL_OVERRIDE_TIMEOUT_HRS = 4
 MAX_HEATING_RATE = 0.5  # °C/min max (safety clamp)
 MIN_HEATING_RATE = 0.005  # °C/min min (safety clamp)
@@ -154,6 +162,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._window_open = False
         self._vacation_active = False
         self._emergency_heat_active = False
+        self._heating_season_active = True
         self._force_return = False
         self._nearest_distance = 0.0
         self._last_nearest_distance = 0.0
@@ -247,6 +256,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_NEAREST_DISTANCE: round(self._nearest_distance, 0),
             ATTR_VACATION_MODE: self._vacation_active,
             ATTR_EMERGENCY_HEAT: self._emergency_heat_active,
+            ATTR_HEATING_SEASON: self._heating_season_active,
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
@@ -331,7 +341,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     def _handle_external_temp_override(self, temp: float) -> None:
         """Handle a temperature change made directly on a TRV or via an external app."""
-        if self._vacation_active or self._emergency_heat_active:
+        if (
+            self._vacation_active
+            or self._preset_mode == MODE_VACATION
+            or self._emergency_heat_active
+            or not self._heating_season_active
+        ):
             return
         self._last_external_override_time = time.time()  # debounce multi-TRV
         self._target_temp = temp
@@ -516,6 +531,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             target = self.max_temp
             climate_active = True
             switch_on = True
+        elif not self._heating_season_active and not frost_risk:
+            # Off-season: no frost risk — behaviour depends on configured off-mode.
+            # Frost protection still takes priority (handled by the else branch below).
+            offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
+            if offmode == SEASON_OFFMODE_OPEN:
+                # Keep TRV valves exercised at max setpoint; switches stay off
+                target = self.max_temp
+                climate_active = True
+                switch_on = False
+            elif offmode == SEASON_OFFMODE_FROST:
+                # Maintain a minimal anti-sticking temperature (7°C)
+                target = SEASON_OFF_FROST_TEMP
+                climate_active = True
+                switch_on = self._cur_temp < (SEASON_OFF_FROST_TEMP + 0.8)
+            else:  # SEASON_OFFMODE_OFF
+                target = None
+                climate_active = False
+                switch_on = False
         else:
             # Frost protection is unconditional: overrides hvac_mode=OFF and open windows
             target = ANTI_FROST_TEMP if frost_risk else effective_target
@@ -542,7 +575,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 self._monthly_actual_heating_s += 60
 
             # Feature-specific savings tracking (time smart features kept temp lower)
-            if not frost_risk and self._hvac_mode == HVACMode.HEAT:
+            if (
+                not frost_risk
+                and self._hvac_mode == HVACMode.HEAT
+                and self._heating_season_active
+                and not self._vacation_active
+                and self._preset_mode != MODE_VACATION
+                and not self._emergency_heat_active
+            ):
                 comfort = self.comfort_temp
                 outdoor = self._outdoor_temp
                 # HDH factor: fraction of potential heat loss saved this tick.
@@ -551,13 +591,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 # hdh_base counts eligible ticks and is the denominator in
                 # _compute_savings_est, making the formula independent of season length.
                 self._monthly_hdh_base += 1.0 / 60
-                if outdoor is not None and comfort > outdoor:
+                outdoor_known = outdoor is not None and comfort > outdoor
+                if outdoor_known:
                     base_delta = max(1.0, comfort - outdoor)
                     hdh_away_tick = (comfort - self.away_temp) / base_delta / 60
                     hdh_window_tick = (comfort - ANTI_FROST_TEMP) / base_delta / 60
                 else:
                     # Fallback fractions when outdoor temp is unavailable
                     # (based on typical EU heating season: comfort=20, away=17, outdoor=7)
+                    base_delta = None
                     hdh_away_tick = 0.23 / 60
                     hdh_window_tick = 1.0 / 60
 
@@ -576,7 +618,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._daily_eco_s += 60
                     self._monthly_eco_s += 60
                     # Scale eco HDH by how far below comfort the actual target is
-                    if outdoor is not None and comfort > outdoor:
+                    if outdoor_known:
                         hdh_eco_tick = (comfort - effective_target) / base_delta / 60
                     else:
                         eco_ratio = (comfort - effective_target) / max(
@@ -598,7 +640,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # 9. Learning
         if not (
             self._vacation_active
+            or self._preset_mode == MODE_VACATION
             or self._emergency_heat_active
+            or not self._heating_season_active
             or self._force_return
             or self._nearest_distance > 500
             or self._hardware_failure
@@ -965,6 +1009,18 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._emergency_heat_active = sw_state is not None and sw_state.state == STATE_ON
         else:
             self._emergency_heat_active = False
+
+        # 1c. Heating Season (Global) — entity takes priority over static boolean
+        season_entity_id = g.data.get(CONF_HEATING_SEASON_ENTITY)
+        if season_entity_id:
+            s_state = self.hass.states.get(season_entity_id)
+            self._heating_season_active = s_state is not None and s_state.state == STATE_ON
+        else:
+            season_status = g.data.get(CONF_HEATING_SEASON_ACTIVE, True)
+            if isinstance(season_status, str):
+                self._heating_season_active = season_status == "on"
+            else:
+                self._heating_season_active = bool(season_status)
 
         # 2. Schedule Logic: HA schedule entity
         sched_id = (
@@ -1360,6 +1416,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
+        season_entity_id = g.data.get(CONF_HEATING_SEASON_ENTITY) if g else None
+        if season_entity_id:
+            self._event_listeners.append(
+                async_track_state_change_event(
+                    self.hass, [season_entity_id], self._on_heating_season_entity
+                )
+            )
+
     @callback
     def _on_presence(self, event):
         """React immediately when a person's state changes (home/away/GPS update)."""
@@ -1459,6 +1523,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @callback
     def _on_override_switch(self, event):
         """React immediately when the emergency heat override switch changes state."""
+        self.hass.async_create_task(self._async_tick(None))
+
+    @callback
+    def _on_heating_season_entity(self, event):
+        """React immediately when the heating season entity changes state."""
         self.hass.async_create_task(self._async_tick(None))
 
     async def async_set_temperature(self, **kwargs: Any) -> None:

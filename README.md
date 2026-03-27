@@ -33,11 +33,12 @@ Every minute, Vesta evaluates each room and decides whether to turn the heater o
 
 1. **Emergency heat override** — When a designated switch or input_boolean is turned on, all heaters are forced to maximum output immediately, ignoring mode, schedule, and window state. Intended for emergency cold situations.
 2. **Frost protection** — If the room drops below 5°C, heating is forced on regardless of schedule, mode, or open windows. This cannot be disabled.
-3. **Vacation mode** — All rooms hold at anti-frost temperature (5°C). Can be activated via a static toggle in Global Settings or by linking a dynamic entity (input_boolean or binary_sensor) that you control from automations or the dashboard.
-4. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
-5. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
-6. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
-7. **Manual override** — You can set any temperature directly from the UI, a TRV physical dial, or an external app. Vesta detects the change and enters manual mode. How long it holds depends on the configurable revert mode (timer, next schedule change, on arrival/departure, or permanent).
+3. **Heating season** — When off-season is active (heating season disabled), rooms switch to a configurable off-season behaviour: TRV valves held open at maximum setpoint to prevent sticking (recommended), a minimal 7°C frost setpoint, or completely off. Frost protection still activates even during off-season.
+4. **Vacation mode** — All rooms hold at anti-frost temperature (5°C). Can be activated via a static toggle in Global Settings or by linking a dynamic entity (input_boolean or binary_sensor) that you control from automations or the dashboard.
+5. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
+6. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
+7. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
+8. **Manual override** — You can set any temperature directly from the UI, a TRV physical dial, or an external app. Vesta detects the change and enters manual mode. How long it holds depends on the configurable revert mode (timer, next schedule change, on arrival/departure, or permanent).
 
 ### Thermal learning
 
@@ -62,6 +63,7 @@ If the heater has been running at full power for 45 minutes but the room tempera
 - **Area auto-discovery** — When adding a room, select a Home Assistant area and Vesta automatically finds the heaters, temperature sensors, and window sensor assigned to it — including entities that inherit the area from their device.
 - **Multiple temperature sensors** — Each room can use more than one temperature sensor. Readings are averaged automatically; offline sensors are excluded. If all configured sensors go offline, Vesta falls back to the TRV's own internal sensor to keep the room controlled.
 - **Native TRV / climate entity support** — For climate entities (TRVs, AC units, etc.) Vesta uses `climate.set_hvac_mode` rather than generic turn on/off, so all integrations are controlled correctly regardless of whether they implement a `turn_on` service. Vesta also reads the TRV's internal temperature sensor to estimate valve openness and improve heating power calculations.
+- **Heating season** — Configure a global "heating season" that can be toggled via an entity (input_boolean or binary_sensor) or a static boolean. When off-season, TRV valves are kept exercised at maximum setpoint to prevent sticking (recommended), or you can choose a 7°C minimal frost setpoint, or completely off. Frost protection always stays active regardless of the season setting.
 - **Vacation mode entity** — Link any input_boolean or binary_sensor to control vacation mode dynamically from automations or the dashboard. When the entity is ON, all rooms drop to anti-frost temperature. A static fallback toggle is also available for manual use.
 - **Emergency heat override** — Link a switch or input_boolean to instantly force all heaters to maximum output across every room. Useful for emergency cold situations or when you need rapid heating regardless of any other setting.
 - **Energy savings tracking** — Each room exposes dedicated sensor entities for heating time and hours saved per feature (away mode, window detection, eco schedule). When energy consumption and price are configured in Global Settings, Vesta also estimates monthly kWh and cost savings.
@@ -149,6 +151,9 @@ Global settings apply to all rooms by default. When editing a room, you can over
 |---------|-------------|
 | Vacation Mode Entity | An input_boolean or binary_sensor. When ON, all rooms drop to 5°C. Takes priority over the static toggle. |
 | Vacation Mode (static fallback) | A simple toggle to activate vacation mode when no entity is configured. |
+| Heating Season Entity | An input_boolean or binary_sensor. When ON = heating season active (normal operation). When OFF = off-season behaviour applies. Takes priority over the static toggle. |
+| Heating Season Active (static fallback) | A toggle to set the season state when no entity is configured. Enabled = heating season active; disabled = off-season. |
+| Off-Season Heater Behaviour | What Vesta does with heaters during off-season: **Open** (TRV valves at max setpoint, prevents sticking — recommended), **Frost** (7°C minimal setpoint), or **Off** (completely off). |
 | Emergency Heat Override | A switch or input_boolean. When ON, all heaters are forced to maximum output immediately. |
 | Boiler Entity | A climate, switch, or input_boolean to control the central boiler. Vesta turns it on when any room calls for heat and (for climate entities) sets the flow temperature automatically. |
 | Boiler Flow Temperature Offset | Added on top of the highest active room setpoint to compute the boiler flow temperature (default 5°C, max 80°C). Only applies when the boiler entity is a climate entity. |
