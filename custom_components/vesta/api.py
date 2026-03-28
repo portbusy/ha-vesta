@@ -243,6 +243,7 @@ def ws_list_rooms(
             "name": entry.title,
             "schedule_source": source,
             "vesta_schedule_id": vesta_id,
+            "schedule_inherited": CONF_SCHEDULE_SOURCE not in entry.data,
             "override_schedule": entry.data.get(CONF_OVERRIDE_SCHEDULE, False),
         })
     connection.send_result(msg["id"], result)

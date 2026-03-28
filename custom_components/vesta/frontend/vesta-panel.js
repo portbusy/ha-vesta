@@ -50,6 +50,7 @@ class VestaPanel extends HTMLElement {
     this._selectedSchedule = null;
     this._rooms = [];
     this._templates = [];
+    this._globalSchedule = null; // {schedule_source, vesta_schedule_id}
     this._tab = "grid"; // "grid" | "rooms"
     this._mobileDayIndex = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
     this._narrow = window.innerWidth < 700;
@@ -80,14 +81,16 @@ class VestaPanel extends HTMLElement {
   async _load() {
     this._loadError = null;
     try {
-      const [schedules, rooms, templates] = await Promise.all([
+      const [schedules, rooms, templates, globalSched] = await Promise.all([
         this._ws({ type: "vesta/schedules/list" }),
         this._ws({ type: "vesta/rooms/list" }),
         this._ws({ type: "vesta/schedules/templates" }),
+        this._ws({ type: "vesta/global/get_schedule" }).catch(() => null),
       ]);
       this._schedules = schedules;
       this._rooms = rooms;
       this._templates = templates;
+      this._globalSchedule = globalSched;
       if (this._schedules.length > 0 && !this._selectedId) {
         await this._selectSchedule(this._schedules[0].id);
       } else {
@@ -292,29 +295,61 @@ class VestaPanel extends HTMLElement {
     `;
   }
 
+  _roomSourceBadge(room, currentSid) {
+    // Case 1: explicitly using this Vesta schedule
+    if (room.schedule_source === "vesta" && room.vesta_schedule_id === currentSid) {
+      return `<span class="badge badge-this">✓ This schedule</span>`;
+    }
+    // Case 2: explicitly using a different Vesta schedule
+    if (room.schedule_source === "vesta" && room.vesta_schedule_id) {
+      const other = this._schedules.find(s => s.id === room.vesta_schedule_id);
+      const name = other ? other.name : room.vesta_schedule_id.slice(0, 8) + "…";
+      return `<span class="badge badge-other-vesta" title="Vesta: ${this._escape(name)}">Vesta: ${this._escape(name)}</span>`;
+    }
+    // Case 3: inheriting from the global setting (no explicit override)
+    if (room.schedule_inherited) {
+      return `<span class="badge badge-inherit">Inherits global</span>`;
+    }
+    // Case 4: explicitly set to use a HA schedule entity
+    return `<span class="badge badge-entity">HA schedule entity</span>`;
+  }
+
+  _globalScheduleDesc() {
+    const g = this._globalSchedule;
+    if (!g || !g.schedule_source) return "HA schedule entity (default)";
+    if (g.schedule_source === "vesta") {
+      const s = this._schedules.find(x => x.id === g.vesta_schedule_id);
+      return s ? `Vesta schedule: ${s.name}` : "Vesta schedule";
+    }
+    return "HA schedule entity";
+  }
+
   _renderRoomsTab() {
     const sid = this._selectedId;
+    const globalDesc = this._globalScheduleDesc();
     return `
       <div class="rooms-tab">
-        <p class="rooms-desc">Assign rooms to use this schedule instead of the global one.</p>
+        <div class="global-info">
+          <span class="global-info-label">Global default:</span>
+          <span class="global-info-value">${this._escape(globalDesc)}</span>
+          <span class="global-info-hint">(used by rooms set to "Inherits global")</span>
+        </div>
         ${this._rooms.length === 0
           ? `<p class="rooms-desc">No rooms found. Add rooms via the Vesta integration settings.</p>`
           : `<div class="rooms-table-wrap">
               <table class="rooms-table">
-                <thead><tr><th>Room</th><th>Schedule Source</th><th></th></tr></thead>
+                <thead><tr><th>Room</th><th>Active source</th><th></th></tr></thead>
                 <tbody>
                   ${this._rooms.map(room => {
                     const usesThis = room.schedule_source === "vesta" && room.vesta_schedule_id === sid;
                     return `<tr>
                       <td>${this._escape(room.name)}</td>
-                      <td class="room-source">${usesThis
-                        ? `<span class="badge vesta">This schedule</span>`
-                        : `<span class="badge inherit">Global / other</span>`}</td>
+                      <td class="room-source">${this._roomSourceBadge(room, sid)}</td>
                       <td>
                         ${usesThis
                           ? `<button class="btn-secondary btn-sm" data-room-action="inherit"
                                      data-entry-id="${room.entry_id}"
-                                     aria-label="Reset ${this._escape(room.name)} to global schedule">Reset to global</button>`
+                                     aria-label="Remove explicit assignment for ${this._escape(room.name)}">Unassign</button>`
                           : `<button class="btn-primary btn-sm" data-room-action="assign"
                                      data-entry-id="${room.entry_id}"
                                      aria-label="Assign ${this._escape(room.name)} to this schedule">Assign</button>`}
@@ -821,10 +856,26 @@ class VestaPanel extends HTMLElement {
       .rooms-table th, .rooms-table td { text-align: left; padding: 8px 12px;
         border-bottom: 1px solid var(--divider-color, #e0e0e0); }
       .rooms-table th { font-weight: 600; color: var(--secondary-text-color, #888); font-size: 0.85em; }
-      .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 500; }
-      .badge.vesta { background: var(--primary-color, #03a9f4); color: #fff; }
-      .badge.inherit { background: var(--secondary-background-color, #e0e0e0); color: var(--secondary-text-color, #555); }
-      .room-source { white-space: nowrap; }
+      /* Global schedule info bar */
+      .global-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+        padding: 10px 14px; margin-bottom: 16px; border-radius: 8px;
+        background: var(--secondary-background-color, #f0f4f8);
+        border-left: 3px solid var(--primary-color, #03a9f4); font-size: 0.88em; }
+      .global-info-label { font-weight: 600; color: var(--primary-text-color, #333); white-space: nowrap; }
+      .global-info-value { color: var(--primary-color, #0277bd); font-weight: 500; }
+      .global-info-hint { color: var(--secondary-text-color, #888); font-size: 0.9em; }
+
+      /* Room source badges */
+      .badge { padding: 3px 9px; border-radius: 12px; font-size: 0.8em; font-weight: 500;
+        display: inline-flex; align-items: center; gap: 4px; max-width: 180px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .badge-this { background: var(--primary-color, #03a9f4); color: #fff; }
+      .badge-other-vesta { background: #e3f2fd; color: #0277bd;
+        border: 1px solid #90caf9; max-width: 160px; }
+      .badge-inherit { background: var(--secondary-background-color, #e8eaf6);
+        color: var(--secondary-text-color, #555); border: 1px solid #c5cae9; }
+      .badge-entity { background: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }
+      .room-source { white-space: nowrap; vertical-align: middle; }
 
       /* Buttons */
       .btn-primary { background: var(--primary-color, #03a9f4); color: #fff; border: none;
