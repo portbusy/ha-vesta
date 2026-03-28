@@ -31,6 +31,13 @@ function modeColor(block) {
   const m = modeFromBlock(block);
   return (MODES[m] || MODES.off).color;
 }
+function roundTo30Min(timeStr) {
+  const [h, m] = timeStr.split(":").map(Number);
+  const total = Math.round((h * 60 + (m || 0)) / 30) * 30;
+  const hh = Math.floor(total / 60) % 24;
+  const mm = total % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 
 class VestaPanel extends HTMLElement {
   constructor() {
@@ -76,6 +83,7 @@ class VestaPanel extends HTMLElement {
   }
 
   async _load() {
+    this._loadError = null;
     try {
       const [schedules, rooms, templates] = await Promise.all([
         this._ws({ type: "vesta/schedules/list" }),
@@ -92,6 +100,7 @@ class VestaPanel extends HTMLElement {
       }
     } catch (e) {
       console.error("Vesta: load error", e);
+      this._loadError = "Could not connect to Vesta. Is the integration loaded?";
       this._render();
     }
   }
@@ -125,7 +134,7 @@ class VestaPanel extends HTMLElement {
               ? `<div class="empty-list">No schedules yet.<br>Click + to create one.</div>`
               : this._schedules.map(s => `
                 <div class="schedule-item ${s.id === this._selectedId ? "active" : ""}" data-id="${s.id}">
-                  <span class="schedule-name">${this._escape(s.name)}</span>
+                  <span class="schedule-name" title="${this._escape(s.name)}">${this._escape(s.name)}</span>
                   <div class="schedule-actions">
                     <button class="btn-icon-sm" data-action="duplicate" data-id="${s.id}" title="Duplicate">⧉</button>
                     <button class="btn-icon-sm danger" data-action="delete" data-id="${s.id}" title="Delete">✕</button>
@@ -143,6 +152,12 @@ class VestaPanel extends HTMLElement {
   }
 
   _renderEmpty() {
+    if (this._loadError) {
+      return `<div class="main-empty">
+        <div class="main-empty-icon">⚠️</div>
+        <div class="main-empty-text" style="color:#e53935">${this._escape(this._loadError)}</div>
+      </div>`;
+    }
     return `<div class="main-empty">
       <div class="main-empty-icon">📅</div>
       <div class="main-empty-text">Select or create a schedule to get started.</div>
@@ -177,8 +192,10 @@ class VestaPanel extends HTMLElement {
     const TOTAL_HEIGHT = 24 * HOUR_HEIGHT;
 
     const columns = DAY_NAMES.map((day, di) => {
-      const dayBlocks = blocks.filter(b => (b.days || []).includes(di));
-      const blockHtml = dayBlocks.map(block => {
+      const dayBlocks = blocks
+        .map((b, idx) => ({ b, idx }))
+        .filter(({ b }) => (b.days || []).includes(di));
+      const blockHtml = dayBlocks.map(({ b: block, idx }) => {
         const startMin = timeToMinutes(block.start);
         const endMin = timeToMinutes(block.end);
         const top = (startMin / 60) * HOUR_HEIGHT;
@@ -186,7 +203,7 @@ class VestaPanel extends HTMLElement {
         const color = modeColor(block);
         const label = this._blockLabel(block);
         return `<div class="block" style="top:${top}px;height:${height}px;background:${color}"
-                     data-block='${JSON.stringify(block).replace(/'/g, "&#39;")}'>
+                     data-block-idx="${idx}">
                   <span class="block-label">${label}</span>
                 </div>`;
       }).join("");
@@ -220,14 +237,18 @@ class VestaPanel extends HTMLElement {
     const HOUR_HEIGHT = 48;
     const TOTAL_HEIGHT = 24 * HOUR_HEIGHT;
 
-    const blockHtml = blocks.map(block => {
+    const allBlocks = s.blocks || [];
+    const blockHtml = (allBlocks
+      .map((b, idx) => ({ b, idx }))
+      .filter(({ b }) => (b.days || []).includes(this._mobileDayIndex))
+    ).map(({ b: block, idx }) => {
       const startMin = timeToMinutes(block.start);
       const endMin = timeToMinutes(block.end);
       const top = (startMin / 60) * HOUR_HEIGHT;
       const height = ((endMin - startMin) / 60) * HOUR_HEIGHT;
       const color = modeColor(block);
       return `<div class="block" style="top:${top}px;height:${height}px;background:${color}"
-                   data-block='${JSON.stringify(block).replace(/'/g, "&#39;")}'>
+                   data-block-idx="${idx}">
                 <span class="block-label">${this._blockLabel(block)}</span>
               </div>`;
     }).join("");
@@ -339,8 +360,9 @@ class VestaPanel extends HTMLElement {
 
     r.querySelectorAll(".block").forEach(el => {
       el.addEventListener("click", () => {
-        const block = JSON.parse(el.dataset.block);
-        this._showBlockDialog(block);
+        const idx = parseInt(el.dataset.blockIdx, 10);
+        const block = this._selectedSchedule.blocks[idx];
+        if (block !== undefined) this._showBlockDialog(block, idx);
       });
     });
 
@@ -506,7 +528,7 @@ class VestaPanel extends HTMLElement {
     });
   }
 
-  _showBlockDialog(existingBlock) {
+  _showBlockDialog(existingBlock, existingIndex = -1) {
     const isEdit = existingBlock !== null;
     const b = existingBlock || { days: [0,1,2,3,4,5,6], start: "06:00", end: "08:00", mode: "comfort" };
 
@@ -535,6 +557,11 @@ class VestaPanel extends HTMLElement {
       </div>
       <fieldset>
         <legend>Days</legend>
+        <div class="day-quick-btns">
+          <button type="button" class="btn-day-quick" data-days="0,1,2,3,4,5,6">All</button>
+          <button type="button" class="btn-day-quick" data-days="0,1,2,3,4">Weekdays</button>
+          <button type="button" class="btn-day-quick" data-days="5,6">Weekend</button>
+        </div>
         <div class="day-checkboxes">${dayCheckboxes}</div>
       </fieldset>
       <div class="dialog-error hidden" id="d-error"></div>
@@ -544,8 +571,8 @@ class VestaPanel extends HTMLElement {
         <button data-dialog-submit class="btn-primary">Save</button>
       </div>
     `, async (container) => {
-      const start = container.querySelector("#d-start").value;
-      const end = container.querySelector("#d-end").value;
+      const start = roundTo30Min(container.querySelector("#d-start").value);
+      const end = roundTo30Min(container.querySelector("#d-end").value);
       const modeVal = container.querySelector("#d-mode").value;
       const temp = container.querySelector("#d-temp")?.value;
       const days = Array.from(container.querySelectorAll(".day-cb input:checked")).map(el => Number(el.value));
@@ -555,19 +582,21 @@ class VestaPanel extends HTMLElement {
         container.querySelector("#d-error").classList.remove("hidden");
         return;
       }
+      if (timeToMinutes(start) >= timeToMinutes(end)) {
+        container.querySelector("#d-error").textContent = "Start time must be before end time.";
+        container.querySelector("#d-error").classList.remove("hidden");
+        return;
+      }
 
-      const mode = modeVal === "custom" ? `temp:${temp}` : modeVal;
+      const mode = modeVal === "custom" ? `temp:${parseFloat(temp).toFixed(1)}` : modeVal;
       const newBlock = { days, start, end, mode };
 
       let blocks = [...(this._selectedSchedule.blocks || [])];
-      if (isEdit) {
-        // Remove old block (match by identity)
-        blocks = blocks.filter(bl =>
-          !(bl.start === existingBlock.start && bl.end === existingBlock.end &&
-            bl.mode === existingBlock.mode && JSON.stringify(bl.days) === JSON.stringify(existingBlock.days))
-        );
+      if (isEdit && existingIndex >= 0) {
+        blocks.splice(existingIndex, 1, newBlock);
+      } else {
+        blocks.push(newBlock);
       }
-      blocks.push(newBlock);
 
       try {
         await this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, blocks });
@@ -580,6 +609,16 @@ class VestaPanel extends HTMLElement {
       }
     });
 
+    // Quick day selection buttons
+    this.shadowRoot.getElementById("dialog-container").querySelectorAll(".btn-day-quick").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const selected = new Set(btn.dataset.days.split(",").map(Number));
+        this.shadowRoot.getElementById("dialog-container").querySelectorAll(".day-cb input").forEach(cb => {
+          cb.checked = selected.has(Number(cb.value));
+        });
+      });
+    });
+
     // Toggle custom temp field
     this.shadowRoot.getElementById("dialog-container").querySelector("#d-mode")?.addEventListener("change", (e) => {
       const tempRow = this.shadowRoot.getElementById("dialog-container").querySelector("#d-temp-row");
@@ -587,12 +626,10 @@ class VestaPanel extends HTMLElement {
     });
 
     // Delete block button
-    if (isEdit) {
+    if (isEdit && existingIndex >= 0) {
       this.shadowRoot.getElementById("dialog-container").querySelector("#d-delete-block")?.addEventListener("click", async () => {
-        let blocks = (this._selectedSchedule.blocks || []).filter(bl =>
-          !(bl.start === existingBlock.start && bl.end === existingBlock.end &&
-            bl.mode === existingBlock.mode && JSON.stringify(bl.days) === JSON.stringify(existingBlock.days))
-        );
+        const blocks = [...(this._selectedSchedule.blocks || [])];
+        blocks.splice(existingIndex, 1);
         try {
           await this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, blocks });
           this._closeDialog();
@@ -681,8 +718,11 @@ class VestaPanel extends HTMLElement {
       .col { flex: 1; display: flex; flex-direction: column; min-width: 60px; }
       .col-header { text-align: center; font-size: 0.8em; font-weight: 600; color: var(--secondary-text-color, #888);
         padding: 4px 0 8px; height: 32px; }
-      .col-body { position: relative; background: var(--secondary-background-color, #f9f9f9);
-        border-radius: 4px; border: 1px solid var(--divider-color, #e0e0e0); }
+      .col-body { position: relative; border-radius: 4px; border: 1px solid var(--divider-color, #e0e0e0);
+        background: var(--secondary-background-color, #f9f9f9)
+          repeating-linear-gradient(to bottom,
+            transparent 0px, transparent 47px,
+            var(--divider-color, #e0e0e0) 47px, var(--divider-color, #e0e0e0) 48px); }
       .block { position: absolute; left: 2px; right: 2px; border-radius: 4px; cursor: pointer;
         transition: filter 0.15s; overflow: hidden; display: flex; align-items: flex-start;
         padding: 2px 4px; }
@@ -739,6 +779,10 @@ class VestaPanel extends HTMLElement {
       .form-row label { flex: 1; }
       fieldset { border: 1px solid var(--divider-color, #ccc); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
       fieldset legend { font-size: 0.85em; color: var(--secondary-text-color, #666); padding: 0 4px; }
+      .day-quick-btns { display: flex; gap: 6px; margin-bottom: 8px; }
+      .btn-day-quick { background: var(--secondary-background-color, #eee); border: 1px solid var(--divider-color, #ccc);
+        border-radius: 4px; padding: 2px 10px; font-size: 0.8em; cursor: pointer; }
+      .btn-day-quick:hover { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
       .day-checkboxes { display: flex; flex-wrap: wrap; gap: 6px; }
       .day-cb { display: flex; align-items: center; gap: 4px; font-size: 0.9em; cursor: pointer; }
       .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

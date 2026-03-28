@@ -331,7 +331,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # Room override: room has its own HA entity schedule
         if self._entry.data.get(CONF_OVERRIDE_SCHEDULE):
             sched_id = self._entry.data.get(CONF_SCHEDULE)
-            return ("entity", sched_id) if sched_id else (None, None)
+            if sched_id:
+                return ("entity", sched_id)
+            # Override enabled but no entity set: fall through to global
         # Room-level Vesta schedule override
         if self._entry.data.get(CONF_SCHEDULE_SOURCE) == SCHEDULE_SOURCE_VESTA:
             sched_id = self._entry.data.get(CONF_VESTA_SCHEDULE_ID)
@@ -1145,7 +1147,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 should_revert = (
                     ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
                     or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
-                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and vesta_mode == "comfort")
+                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and vesta_mode not in ("off",))
                 )
                 if should_revert:
                     _LOGGER.info(

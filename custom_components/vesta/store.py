@@ -1,6 +1,7 @@
 """Persistent storage for Vesta native schedules."""
 from __future__ import annotations
 
+import copy
 import uuid
 from typing import Any
 
@@ -62,7 +63,16 @@ class ScheduleStore:
         """Load schedules from persistent storage."""
         stored = await self._store.async_load()
         if stored and isinstance(stored, dict):
-            self._data = stored
+            # Validate structure: keep only well-formed schedule entries
+            valid = {}
+            for sid, entry in stored.items():
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("name"), str)
+                    and isinstance(entry.get("blocks"), list)
+                ):
+                    valid[sid] = entry
+            self._data = valid
         else:
             self._data = {}
 
@@ -84,7 +94,6 @@ class ScheduleStore:
         """Create a new schedule (optionally from a template) and return its ID."""
         schedule_id = str(uuid.uuid4())
         if template and template in SCHEDULE_TEMPLATES:
-            import copy
             blocks = copy.deepcopy(SCHEDULE_TEMPLATES[template]["blocks"])
         else:
             blocks = []
@@ -99,7 +108,6 @@ class ScheduleStore:
         original = self._data.get(schedule_id)
         if original is None:
             return None
-        import copy
         new_id = str(uuid.uuid4())
         self._data[new_id] = {
             "name": new_name,
