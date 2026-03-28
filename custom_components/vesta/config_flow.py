@@ -62,6 +62,9 @@ from .const import (
     CONF_ENERGY_PRICE_KWH,
     CONF_ENERGY_ANNUAL_DATA,
     CONF_ENERGY_KWH_THIS_YEAR,
+    CONF_SCHEDULE_SOURCE,
+    CONF_VESTA_SCHEDULE_ID,
+    SCHEDULE_SOURCE_VESTA,
     DEFAULT_NAME,
 )
 
@@ -1051,8 +1054,35 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             defaults=dict(current), global_data=global_data
         )
 
+        # Warn if a Vesta schedule is already assigned via the panel
+        vesta_notice = ""
+        if current.get(CONF_SCHEDULE_SOURCE) == SCHEDULE_SOURCE_VESTA:
+            vesta_schedule_id = current.get(CONF_VESTA_SCHEDULE_ID, "")
+            sched_name = vesta_schedule_id
+            store = self.hass.data.get(DOMAIN, {}).get("schedule_store")
+            if store and vesta_schedule_id:
+                sched_entry = store.get(vesta_schedule_id)
+                if sched_entry:
+                    sched_name = sched_entry["name"]
+            lang = getattr(self.hass.config, "language", "en")
+            if lang == "it":
+                vesta_notice = (
+                    f"⚠️ Questa stanza usa la schedule Vesta **\"{sched_name}\"**. "
+                    f"Ha la priorità sulla schedule di HA configurata nella sezione "
+                    f"*Override* qui sotto. Per cambiare o rimuovere l'assegnazione, "
+                    f"usa il pannello Vesta.\n\n"
+                )
+            else:
+                vesta_notice = (
+                    f"⚠️ This room is using the Vesta schedule **\"{sched_name}\"**. "
+                    f"It takes priority over the HA schedule entity configured in the "
+                    f"*Overrides* section below. To change or remove the assignment, "
+                    f"use the Vesta panel.\n\n"
+                )
+
         return self.async_show_form(
             step_id="room",
             data_schema=vol.Schema(schema_dict),
             errors=errors,
+            description_placeholders={"vesta_schedule_notice": vesta_notice},
         )

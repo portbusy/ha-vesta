@@ -273,7 +273,8 @@
               "manual_override_hours": "Per quanto tempo mantenere la temperatura manuale prima di ripristinare (solo modalità timer)."
             }
           }
-        }
+        },
+        "description": "{vesta_schedule_notice}"
       }
     },
     "error": {

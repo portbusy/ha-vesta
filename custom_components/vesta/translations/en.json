@@ -279,7 +279,8 @@
               "manual_override_hours": "How long to hold the manual temperature before reverting (timer modes only)."
             }
           }
-        }
+        },
+        "description": "{vesta_schedule_notice}"
       }
     },
     "error": {
