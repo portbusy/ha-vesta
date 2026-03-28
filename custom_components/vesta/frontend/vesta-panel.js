@@ -5,12 +5,14 @@
 
 const MODES = {
   comfort: { label: "Comfort", color: "#FF8C00" },
-  eco:     { label: "Eco",     color: "#039BE5" },
-  away:    { label: "Away",    color: "#43A047" },
+  eco:     { label: "Eco",     color: "#0277BD" },   // darkened for WCAG AA contrast
+  away:    { label: "Away",    color: "#2E7D32" },   // darkened for WCAG AA contrast
   frost:   { label: "Frost",   color: "#7C4DFF" },
-  off:     { label: "Off",     color: "#9E9E9E" },
-  custom:  { label: "Custom",  color: "#E91E63" },
+  off:     { label: "Off",     color: "#757575" },   // darkened from #9E9E9E
+  custom:  { label: "Custom",  color: "#C2185B" },   // darkened from #E91E63
 };
+
+const HOUR_HEIGHT = 40; // px per hour (24h = 960px total)
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_NAMES_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -21,7 +23,6 @@ function timeToMinutes(t) {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
 }
-
 function modeFromBlock(block) {
   if (!block.mode) return "off";
   if (block.mode.startsWith("temp:")) return "custom";
@@ -50,8 +51,9 @@ class VestaPanel extends HTMLElement {
     this._rooms = [];
     this._templates = [];
     this._tab = "grid"; // "grid" | "rooms"
-    this._mobileDayIndex = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1; // Mon=0
+    this._mobileDayIndex = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
     this._narrow = window.innerWidth < 700;
+    this._sidebarOpen = false;
     this._resizeObserver = new ResizeObserver(() => {
       const wasNarrow = this._narrow;
       this._narrow = this.offsetWidth < 700;
@@ -68,18 +70,11 @@ class VestaPanel extends HTMLElement {
     }
   }
 
-  connectedCallback() {
-    this._render();
-  }
-
-  disconnectedCallback() {
-    this._resizeObserver.disconnect();
-  }
+  connectedCallback() { this._render(); }
+  disconnectedCallback() { this._resizeObserver.disconnect(); }
 
   async _ws(msg) {
-    return new Promise((resolve, reject) => {
-      this._hass.connection.sendMessagePromise(msg).then(resolve).catch(reject);
-    });
+    return this._hass.connection.sendMessagePromise(msg);
   }
 
   async _load() {
@@ -112,6 +107,7 @@ class VestaPanel extends HTMLElement {
     } catch (e) {
       this._selectedSchedule = null;
     }
+    if (this._narrow) this._sidebarOpen = false;
     this._render();
   }
 
@@ -121,28 +117,43 @@ class VestaPanel extends HTMLElement {
 
   _render() {
     const root = this.shadowRoot;
+    const sidebarClass = this._narrow
+      ? (this._sidebarOpen ? "sidebar sidebar-drawer sidebar-open" : "sidebar sidebar-drawer")
+      : "sidebar";
+
     root.innerHTML = `
       <style>${this._css()}</style>
       <div class="app">
-        <div class="sidebar">
+        ${this._narrow && this._sidebarOpen ? `<div class="sidebar-scrim" id="sidebar-scrim"></div>` : ""}
+        <div class="${sidebarClass}">
           <div class="sidebar-header">
             <span class="logo">🌡 Vesta</span>
-            <button class="btn-icon" id="btn-new" title="New schedule">+</button>
+            <div style="display:flex;gap:4px;align-items:center">
+              <button class="btn-icon" id="btn-new" title="New schedule" aria-label="New schedule">+</button>
+              ${this._narrow ? `<button class="btn-icon" id="btn-close-sidebar" aria-label="Close sidebar">✕</button>` : ""}
+            </div>
           </div>
-          <div class="schedule-list">
+          <div class="schedule-list" role="listbox" aria-label="Schedules">
             ${this._schedules.length === 0
-              ? `<div class="empty-list">No schedules yet.<br>Click + to create one.</div>`
+              ? `<div class="empty-list">No schedules yet.<br>Tap + to create your first one.</div>`
               : this._schedules.map(s => `
-                <div class="schedule-item ${s.id === this._selectedId ? "active" : ""}" data-id="${s.id}">
+                <div class="schedule-item ${s.id === this._selectedId ? "active" : ""}" data-id="${s.id}"
+                     role="option" aria-selected="${s.id === this._selectedId}" tabindex="0">
                   <span class="schedule-name" title="${this._escape(s.name)}">${this._escape(s.name)}</span>
                   <div class="schedule-actions">
-                    <button class="btn-icon-sm" data-action="duplicate" data-id="${s.id}" title="Duplicate">⧉</button>
-                    <button class="btn-icon-sm danger" data-action="delete" data-id="${s.id}" title="Delete">✕</button>
+                    <button class="btn-icon-sm" data-action="duplicate" data-id="${s.id}" aria-label="Duplicate ${this._escape(s.name)}">⧉</button>
+                    <button class="btn-icon-sm danger" data-action="delete" data-id="${s.id}" aria-label="Delete ${this._escape(s.name)}">✕</button>
                   </div>
                 </div>`).join("")}
           </div>
         </div>
         <div class="main">
+          ${this._narrow ? `
+            <div class="mobile-topbar">
+              <button class="btn-icon" id="btn-open-sidebar" aria-label="Open schedules list">☰</button>
+              <span class="mobile-topbar-title">${this._selectedSchedule ? this._escape(this._selectedSchedule.name) : "Vesta Schedules"}</span>
+            </div>
+          ` : ""}
           ${this._selectedSchedule ? this._renderMain() : this._renderEmpty()}
         </div>
       </div>
@@ -156,11 +167,19 @@ class VestaPanel extends HTMLElement {
       return `<div class="main-empty">
         <div class="main-empty-icon">⚠️</div>
         <div class="main-empty-text" style="color:#e53935">${this._escape(this._loadError)}</div>
+        <button class="btn-primary" id="btn-retry">Retry</button>
+      </div>`;
+    }
+    if (this._schedules.length === 0) {
+      return `<div class="main-empty">
+        <div class="main-empty-icon">📅</div>
+        <div class="main-empty-text">No schedules yet.</div>
+        <button class="btn-primary" id="btn-new-empty">Create your first schedule</button>
       </div>`;
     }
     return `<div class="main-empty">
       <div class="main-empty-icon">📅</div>
-      <div class="main-empty-text">Select or create a schedule to get started.</div>
+      <div class="main-empty-text">Select a schedule to view or edit it.</div>
     </div>`;
   }
 
@@ -168,64 +187,58 @@ class VestaPanel extends HTMLElement {
     const s = this._selectedSchedule;
     return `
       <div class="main-header">
-        <h2 class="schedule-title">${this._escape(s.name)}</h2>
+        <h2 class="schedule-title" id="main-title">${this._escape(s.name)}</h2>
         <div class="main-actions">
           <button class="btn-primary" id="btn-add-block">+ Add block</button>
           <button class="btn-secondary" id="btn-rename">Rename</button>
         </div>
       </div>
-      <div class="tab-bar">
-        <button class="tab ${this._tab === "grid" ? "active" : ""}" data-tab="grid">Schedule Grid</button>
-        <button class="tab ${this._tab === "rooms" ? "active" : ""}" data-tab="rooms">Room Assignments</button>
+      <div class="tab-bar" role="tablist">
+        <button class="tab ${this._tab === "grid" ? "active" : ""}" data-tab="grid"
+                role="tab" aria-selected="${this._tab === "grid"}">Schedule Grid</button>
+        <button class="tab ${this._tab === "rooms" ? "active" : ""}" data-tab="rooms"
+                role="tab" aria-selected="${this._tab === "rooms"}">Room Assignments</button>
       </div>
       ${this._tab === "grid" ? this._renderGrid() : this._renderRoomsTab()}
     `;
   }
 
   _renderGrid() {
-    if (this._narrow) {
-      return this._renderMobileGrid();
-    }
+    if (this._narrow) return this._renderMobileGrid();
     const s = this._selectedSchedule;
     const blocks = s.blocks || [];
-    const HOUR_HEIGHT = 48; // px per hour
     const TOTAL_HEIGHT = 24 * HOUR_HEIGHT;
 
     const columns = DAY_NAMES.map((day, di) => {
-      const dayBlocks = blocks
-        .map((b, idx) => ({ b, idx }))
-        .filter(({ b }) => (b.days || []).includes(di));
+      const dayBlocks = blocks.map((b, idx) => ({ b, idx })).filter(({ b }) => (b.days || []).includes(di));
       const blockHtml = dayBlocks.map(({ b: block, idx }) => {
         const startMin = timeToMinutes(block.start);
         const endMin = timeToMinutes(block.end);
         const top = (startMin / 60) * HOUR_HEIGHT;
         const height = ((endMin - startMin) / 60) * HOUR_HEIGHT;
-        const color = modeColor(block);
         const label = this._blockLabel(block);
-        return `<div class="block" style="top:${top}px;height:${height}px;background:${color}"
-                     data-block-idx="${idx}">
-                  <span class="block-label">${label}</span>
+        return `<div class="block" style="top:${top}px;height:${height}px;background:${modeColor(block)}"
+                     data-block-idx="${idx}" role="button" tabindex="0"
+                     aria-label="Edit ${this._escape(label)} block, ${block.start}–${block.end}">
+                  <span class="block-label">${this._escape(label)}</span>
                 </div>`;
       }).join("");
       return `<div class="col">
         <div class="col-header">${day}</div>
-        <div class="col-body" style="height:${TOTAL_HEIGHT}px" data-day="${di}">
-          ${blockHtml}
-        </div>
+        <div class="col-body" style="height:${TOTAL_HEIGHT}px" data-day="${di}">${blockHtml}</div>
       </div>`;
     }).join("");
 
-    const timeAxis = Array.from({ length: 25 }, (_, i) => {
-      const top = i * HOUR_HEIGHT;
-      return `<div class="time-tick" style="top:${top}px">${pad(i)}:00</div>`;
-    }).join("");
+    const timeAxis = Array.from({ length: 25 }, (_, i) =>
+      `<div class="time-tick" style="top:${i * HOUR_HEIGHT}px">${pad(i)}:00</div>`
+    ).join("");
 
     return `
-      <div class="grid-legend">${Object.entries(MODES).map(([k, v]) =>
-        `<span class="legend-item"><span class="legend-dot" style="background:${v.color}"></span>${v.label}</span>`
+      <div class="grid-legend" aria-label="Mode legend">${Object.entries(MODES).map(([, v]) =>
+        `<span class="legend-item"><span class="legend-dot" style="background:${v.color}" aria-hidden="true"></span>${v.label}</span>`
       ).join("")}</div>
       <div class="grid-wrapper">
-        <div class="time-axis">${timeAxis}</div>
+        <div class="time-axis" aria-hidden="true">${timeAxis}</div>
         <div class="grid-days">${columns}</div>
       </div>
     `;
@@ -233,44 +246,46 @@ class VestaPanel extends HTMLElement {
 
   _renderMobileGrid() {
     const s = this._selectedSchedule;
-    const blocks = (s.blocks || []).filter(b => (b.days || []).includes(this._mobileDayIndex));
-    const HOUR_HEIGHT = 48;
     const TOTAL_HEIGHT = 24 * HOUR_HEIGHT;
-
     const allBlocks = s.blocks || [];
-    const blockHtml = (allBlocks
+    const blockHtml = allBlocks
       .map((b, idx) => ({ b, idx }))
       .filter(({ b }) => (b.days || []).includes(this._mobileDayIndex))
-    ).map(({ b: block, idx }) => {
-      const startMin = timeToMinutes(block.start);
-      const endMin = timeToMinutes(block.end);
-      const top = (startMin / 60) * HOUR_HEIGHT;
-      const height = ((endMin - startMin) / 60) * HOUR_HEIGHT;
-      const color = modeColor(block);
-      return `<div class="block" style="top:${top}px;height:${height}px;background:${color}"
-                   data-block-idx="${idx}">
-                <span class="block-label">${this._blockLabel(block)}</span>
-              </div>`;
-    }).join("");
+      .map(({ b: block, idx }) => {
+        const startMin = timeToMinutes(block.start);
+        const endMin = timeToMinutes(block.end);
+        const top = (startMin / 60) * HOUR_HEIGHT;
+        const height = ((endMin - startMin) / 60) * HOUR_HEIGHT;
+        const label = this._blockLabel(block);
+        return `<div class="block" style="top:${top}px;height:${height}px;background:${modeColor(block)}"
+                     data-block-idx="${idx}" role="button" tabindex="0"
+                     aria-label="Edit ${this._escape(label)} block, ${block.start}–${block.end}">
+                  <span class="block-label">${this._escape(label)}</span>
+                </div>`;
+      }).join("");
+
+    const dayButtons = DAY_NAMES.map((name, i) =>
+      `<button class="btn-day-select ${i === this._mobileDayIndex ? "active" : ""}" data-day="${i}"
+               aria-pressed="${i === this._mobileDayIndex}">${name}</button>`
+    ).join("");
 
     return `
       <div class="mobile-nav">
-        <button class="btn-icon" id="btn-prev-day">‹</button>
+        <button class="btn-icon btn-nav" id="btn-prev-day" aria-label="Previous day">‹</button>
         <span class="mobile-day-label">${DAY_NAMES_FULL[this._mobileDayIndex]}</span>
-        <button class="btn-icon" id="btn-next-day">›</button>
+        <button class="btn-icon btn-nav" id="btn-next-day" aria-label="Next day">›</button>
       </div>
-      <div class="grid-legend">${Object.entries(MODES).map(([k, v]) =>
-        `<span class="legend-item"><span class="legend-dot" style="background:${v.color}"></span>${v.label}</span>`
+      <div class="day-select-row" role="group" aria-label="Select day">${dayButtons}</div>
+      <div class="grid-legend">${Object.entries(MODES).map(([, v]) =>
+        `<span class="legend-item"><span class="legend-dot" style="background:${v.color}" aria-hidden="true"></span>${v.label}</span>`
       ).join("")}</div>
       <div class="grid-wrapper mobile">
-        <div class="time-axis">${Array.from({ length: 25 }, (_, i) =>
+        <div class="time-axis" aria-hidden="true">${Array.from({ length: 25 }, (_, i) =>
           `<div class="time-tick" style="top:${i * HOUR_HEIGHT}px">${pad(i)}:00</div>`).join("")}</div>
         <div class="grid-days single">
           <div class="col" style="flex:1">
             <div class="col-header">${DAY_NAMES[this._mobileDayIndex]}</div>
-            <div class="col-body" style="height:${TOTAL_HEIGHT}px" data-day="${this._mobileDayIndex}">
-              ${blockHtml}
-            </div>
+            <div class="col-body" style="height:${TOTAL_HEIGHT}px" data-day="${this._mobileDayIndex}">${blockHtml}</div>
           </div>
         </div>
       </div>
@@ -282,39 +297,45 @@ class VestaPanel extends HTMLElement {
     return `
       <div class="rooms-tab">
         <p class="rooms-desc">Assign rooms to use this schedule instead of the global one.</p>
-        <table class="rooms-table">
-          <thead><tr><th>Room</th><th>Schedule Source</th><th></th></tr></thead>
-          <tbody>
-            ${this._rooms.map(room => {
-              const usesThis = room.schedule_source === "vesta" && room.vesta_schedule_id === sid;
-              const inherits = room.schedule_source !== "vesta" || !room.vesta_schedule_id;
-              return `<tr>
-                <td>${this._escape(room.name)}</td>
-                <td class="room-source">${usesThis ? `<span class="badge vesta">This schedule</span>` : `<span class="badge inherit">Global / other</span>`}</td>
-                <td>
-                  ${usesThis
-                    ? `<button class="btn-secondary btn-sm" data-room-action="inherit" data-entry-id="${room.entry_id}">Reset to global</button>`
-                    : `<button class="btn-primary btn-sm" data-room-action="assign" data-entry-id="${room.entry_id}">Assign</button>`}
-                </td>
-              </tr>`;
-            }).join("")}
-          </tbody>
-        </table>
+        ${this._rooms.length === 0
+          ? `<p class="rooms-desc">No rooms found. Add rooms via the Vesta integration settings.</p>`
+          : `<div class="rooms-table-wrap">
+              <table class="rooms-table">
+                <thead><tr><th>Room</th><th>Schedule Source</th><th></th></tr></thead>
+                <tbody>
+                  ${this._rooms.map(room => {
+                    const usesThis = room.schedule_source === "vesta" && room.vesta_schedule_id === sid;
+                    return `<tr>
+                      <td>${this._escape(room.name)}</td>
+                      <td class="room-source">${usesThis
+                        ? `<span class="badge vesta">This schedule</span>`
+                        : `<span class="badge inherit">Global / other</span>`}</td>
+                      <td>
+                        ${usesThis
+                          ? `<button class="btn-secondary btn-sm" data-room-action="inherit"
+                                     data-entry-id="${room.entry_id}"
+                                     aria-label="Reset ${this._escape(room.name)} to global schedule">Reset to global</button>`
+                          : `<button class="btn-primary btn-sm" data-room-action="assign"
+                                     data-entry-id="${room.entry_id}"
+                                     aria-label="Assign ${this._escape(room.name)} to this schedule">Assign</button>`}
+                      </td>
+                    </tr>`;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>`}
       </div>
     `;
   }
 
   _renderDialogPlaceholder() {
-    return `<div id="dialog-overlay" class="dialog-overlay hidden"></div>
-            <div id="dialog-container" class="dialog hidden"></div>`;
+    return `<div id="dialog-overlay" class="dialog-overlay hidden" role="presentation"></div>
+            <div id="dialog-container" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="d-title"></div>`;
   }
 
   _blockLabel(block) {
     const m = modeFromBlock(block);
-    if (m === "custom") {
-      const temp = block.mode.split(":")[1];
-      return `${temp}°`;
-    }
+    if (m === "custom") return `${block.mode.split(":")[1]}°`;
     return (MODES[m] || MODES.off).label;
   }
 
@@ -326,43 +347,56 @@ class VestaPanel extends HTMLElement {
     const r = this.shadowRoot;
 
     r.getElementById("btn-new")?.addEventListener("click", () => this._showCreateDialog());
+    r.getElementById("btn-new-empty")?.addEventListener("click", () => this._showCreateDialog());
+    r.getElementById("btn-retry")?.addEventListener("click", () => this._load());
+
+    r.getElementById("btn-open-sidebar")?.addEventListener("click", () => {
+      this._sidebarOpen = true;
+      this._render();
+    });
+    r.getElementById("btn-close-sidebar")?.addEventListener("click", () => {
+      this._sidebarOpen = false;
+      this._render();
+    });
+    r.getElementById("sidebar-scrim")?.addEventListener("click", () => {
+      this._sidebarOpen = false;
+      this._render();
+    });
 
     r.querySelectorAll(".schedule-item").forEach(el => {
-      el.addEventListener("click", (e) => {
+      const select = (e) => {
         if (e.target.closest("[data-action]")) return;
         this._selectSchedule(el.dataset.id);
+      };
+      el.addEventListener("click", select);
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(e); }
       });
     });
 
     r.querySelectorAll("[data-action=duplicate]").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._showDuplicateDialog(btn.dataset.id);
-      });
+      btn.addEventListener("click", (e) => { e.stopPropagation(); this._showDuplicateDialog(btn.dataset.id); });
     });
-
     r.querySelectorAll("[data-action=delete]").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._confirmDelete(btn.dataset.id);
-      });
+      btn.addEventListener("click", (e) => { e.stopPropagation(); this._confirmDelete(btn.dataset.id); });
     });
 
     r.querySelectorAll(".tab").forEach(t => {
-      t.addEventListener("click", () => {
-        this._tab = t.dataset.tab;
-        this._render();
-      });
+      t.addEventListener("click", () => { this._tab = t.dataset.tab; this._render(); });
     });
 
     r.getElementById("btn-add-block")?.addEventListener("click", () => this._showBlockDialog(null));
     r.getElementById("btn-rename")?.addEventListener("click", () => this._showRenameDialog());
 
     r.querySelectorAll(".block").forEach(el => {
-      el.addEventListener("click", () => {
+      const open = () => {
         const idx = parseInt(el.dataset.blockIdx, 10);
         const block = this._selectedSchedule.blocks[idx];
         if (block !== undefined) this._showBlockDialog(block, idx);
+      };
+      el.addEventListener("click", open);
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
       });
     });
 
@@ -374,16 +408,18 @@ class VestaPanel extends HTMLElement {
       this._mobileDayIndex = (this._mobileDayIndex + 1) % 7;
       this._render();
     });
+    r.querySelectorAll(".btn-day-select").forEach(btn => {
+      btn.addEventListener("click", () => {
+        this._mobileDayIndex = parseInt(btn.dataset.day, 10);
+        this._render();
+      });
+    });
 
     r.querySelectorAll("[data-room-action]").forEach(btn => {
       btn.addEventListener("click", () => {
         const action = btn.dataset.roomAction;
         const entryId = btn.dataset.entryId;
-        if (action === "assign") {
-          this._assignRoom(entryId, "vesta", this._selectedId);
-        } else {
-          this._assignRoom(entryId, "inherit", null);
-        }
+        this._assignRoom(entryId, action === "assign" ? "vesta" : "inherit", this._selectedId, btn);
       });
     });
 
@@ -399,12 +435,32 @@ class VestaPanel extends HTMLElement {
     const container = this.shadowRoot.getElementById("dialog-container");
     overlay.classList.remove("hidden");
     container.classList.remove("hidden");
-    container.innerHTML = html;
-    this._currentDialogSubmit = onSubmit;
-    container.querySelector("[data-dialog-submit]")?.addEventListener("click", () => {
-      onSubmit(container);
-    });
+    container.innerHTML = `
+      <button class="dialog-close" id="d-close" aria-label="Close">✕</button>
+      ${html}
+    `;
+    container.querySelector("[data-dialog-submit]")?.addEventListener("click", () => onSubmit(container));
     container.querySelector("[data-dialog-cancel]")?.addEventListener("click", () => this._closeDialog());
+    container.querySelector("#d-close")?.addEventListener("click", () => this._closeDialog());
+
+    // Close on Escape, focus trap on Tab
+    container.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { this._closeDialog(); return; }
+      if (e.key !== "Tab") return;
+      const focusable = Array.from(container.querySelectorAll(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled])"
+      ));
+      if (focusable.length < 2) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = this.shadowRoot.activeElement;
+      if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+    });
+
+    // Auto-focus first input or the submit button
+    const firstInput = container.querySelector("input, select");
+    (firstInput || container.querySelector("[data-dialog-submit]"))?.focus();
   }
 
   _closeDialog() {
@@ -414,17 +470,15 @@ class VestaPanel extends HTMLElement {
 
   _showCreateDialog() {
     const templateOptions = [
-      `<option value="">Blank</option>`,
-      ...this._templates.map(t => `<option value="${t.id}">${this._escape(t.name)}</option>`),
+      `<option value="">Blank schedule</option>`,
+      ...this._templates.map(t => `<option value="${t.id}">${this._escape(t.name)} (${t.block_count} blocks)</option>`),
     ].join("");
 
     this._showDialog(`
-      <h3>New Schedule</h3>
-      <label>Name<br><input id="d-name" type="text" placeholder="My schedule" /></label>
-      <label>Template<br>
-        <select id="d-template">${templateOptions}</select>
-      </label>
-      <div class="dialog-error hidden" id="d-error"></div>
+      <h3 id="d-title">New Schedule</h3>
+      <label>Name<br><input id="d-name" type="text" placeholder="My schedule" autocomplete="off" /></label>
+      <label>Start from template<br><select id="d-template">${templateOptions}</select></label>
+      <div class="dialog-error hidden" id="d-error" role="alert"></div>
       <div class="dialog-actions">
         <button data-dialog-cancel class="btn-secondary">Cancel</button>
         <button data-dialog-submit class="btn-primary">Create</button>
@@ -433,8 +487,10 @@ class VestaPanel extends HTMLElement {
       const name = container.querySelector("#d-name").value.trim();
       const template = container.querySelector("#d-template").value || null;
       if (!name) {
-        container.querySelector("#d-error").textContent = "Name is required.";
-        container.querySelector("#d-error").classList.remove("hidden");
+        const err = container.querySelector("#d-error");
+        err.textContent = "Name is required.";
+        err.classList.remove("hidden");
+        container.querySelector("#d-name").focus();
         return;
       }
       try {
@@ -443,20 +499,20 @@ class VestaPanel extends HTMLElement {
         await this._load();
         await this._selectSchedule(result.id);
       } catch (e) {
-        container.querySelector("#d-error").textContent = "Error: " + (e.message || e);
-        container.querySelector("#d-error").classList.remove("hidden");
+        const err = container.querySelector("#d-error");
+        err.textContent = "Error: " + (e.message || e);
+        err.classList.remove("hidden");
       }
     });
-    this.shadowRoot.getElementById("dialog-container").querySelector("#d-name")?.focus();
   }
 
   _showDuplicateDialog(scheduleId) {
     const original = this._schedules.find(s => s.id === scheduleId);
     const defaultName = original ? `${original.name} (copy)` : "Copy";
     this._showDialog(`
-      <h3>Duplicate Schedule</h3>
-      <label>New name<br><input id="d-name" type="text" value="${this._escape(defaultName)}" /></label>
-      <div class="dialog-error hidden" id="d-error"></div>
+      <h3 id="d-title">Duplicate Schedule</h3>
+      <label>New name<br><input id="d-name" type="text" value="${this._escape(defaultName)}" autocomplete="off" /></label>
+      <div class="dialog-error hidden" id="d-error" role="alert"></div>
       <div class="dialog-actions">
         <button data-dialog-cancel class="btn-secondary">Cancel</button>
         <button data-dialog-submit class="btn-primary">Duplicate</button>
@@ -470,19 +526,20 @@ class VestaPanel extends HTMLElement {
         await this._load();
         await this._selectSchedule(result.id);
       } catch (e) {
-        container.querySelector("#d-error").textContent = "Error: " + (e.message || e);
-        container.querySelector("#d-error").classList.remove("hidden");
+        const err = container.querySelector("#d-error");
+        err.textContent = "Error: " + (e.message || e);
+        err.classList.remove("hidden");
       }
     });
-    this.shadowRoot.getElementById("dialog-container").querySelector("#d-name")?.select();
+    this.shadowRoot.getElementById("dialog-container")?.querySelector("#d-name")?.select();
   }
 
   _showRenameDialog() {
     const current = this._selectedSchedule?.name || "";
     this._showDialog(`
-      <h3>Rename Schedule</h3>
-      <label>Name<br><input id="d-name" type="text" value="${this._escape(current)}" /></label>
-      <div class="dialog-error hidden" id="d-error"></div>
+      <h3 id="d-title">Rename Schedule</h3>
+      <label>Name<br><input id="d-name" type="text" value="${this._escape(current)}" autocomplete="off" /></label>
+      <div class="dialog-error hidden" id="d-error" role="alert"></div>
       <div class="dialog-actions">
         <button data-dialog-cancel class="btn-secondary">Cancel</button>
         <button data-dialog-submit class="btn-primary">Save</button>
@@ -496,19 +553,21 @@ class VestaPanel extends HTMLElement {
         await this._load();
         await this._selectSchedule(this._selectedId);
       } catch (e) {
-        container.querySelector("#d-error").textContent = "Error: " + (e.message || e);
-        container.querySelector("#d-error").classList.remove("hidden");
+        const err = container.querySelector("#d-error");
+        err.textContent = "Error: " + (e.message || e);
+        err.classList.remove("hidden");
       }
     });
-    this.shadowRoot.getElementById("dialog-container").querySelector("#d-name")?.select();
+    this.shadowRoot.getElementById("dialog-container")?.querySelector("#d-name")?.select();
   }
 
   _confirmDelete(scheduleId) {
     const s = this._schedules.find(x => x.id === scheduleId);
     const name = s ? s.name : scheduleId;
     this._showDialog(`
-      <h3>Delete Schedule</h3>
+      <h3 id="d-title">Delete Schedule</h3>
       <p>Delete <strong>${this._escape(name)}</strong>? Rooms using it will revert to the global schedule.</p>
+      <div class="dialog-error hidden" id="d-error" role="alert"></div>
       <div class="dialog-actions">
         <button data-dialog-cancel class="btn-secondary">Cancel</button>
         <button data-dialog-submit class="btn-primary danger">Delete</button>
@@ -516,14 +575,12 @@ class VestaPanel extends HTMLElement {
     `, async () => {
       try {
         await this._ws({ type: "vesta/schedules/delete", schedule_id: scheduleId });
-        if (this._selectedId === scheduleId) {
-          this._selectedId = null;
-          this._selectedSchedule = null;
-        }
+        if (this._selectedId === scheduleId) { this._selectedId = null; this._selectedSchedule = null; }
         this._closeDialog();
         await this._load();
       } catch (e) {
-        console.error("Delete error", e);
+        const err = this.shadowRoot.getElementById("dialog-container")?.querySelector("#d-error");
+        if (err) { err.textContent = "Error: " + (e.message || e); err.classList.remove("hidden"); }
       }
     });
   }
@@ -531,27 +588,23 @@ class VestaPanel extends HTMLElement {
   _showBlockDialog(existingBlock, existingIndex = -1) {
     const isEdit = existingBlock !== null;
     const b = existingBlock || { days: [0,1,2,3,4,5,6], start: "06:00", end: "08:00", mode: "comfort" };
-
     const currentMode = modeFromBlock(b);
     const currentTemp = currentMode === "custom" ? b.mode.split(":")[1] : "21";
 
     const modeOptions = Object.entries(MODES).map(([k, v]) =>
       `<option value="${k}" ${currentMode === k ? "selected" : ""}>${v.label}</option>`
     ).join("");
-
     const dayCheckboxes = DAY_NAMES.map((name, i) =>
       `<label class="day-cb"><input type="checkbox" value="${i}" ${(b.days || []).includes(i) ? "checked" : ""}> ${name}</label>`
     ).join("");
 
     this._showDialog(`
-      <h3>${isEdit ? "Edit Block" : "Add Block"}</h3>
+      <h3 id="d-title">${isEdit ? "Edit Block" : "Add Block"}</h3>
       <div class="form-row">
         <label>Start<br><input id="d-start" type="time" value="${b.start}" step="1800" /></label>
         <label>End<br><input id="d-end" type="time" value="${b.end}" step="1800" /></label>
       </div>
-      <label>Mode<br>
-        <select id="d-mode">${modeOptions}</select>
-      </label>
+      <label>Mode<br><select id="d-mode">${modeOptions}</select></label>
       <div id="d-temp-row" style="display:${currentMode === "custom" ? "block" : "none"}">
         <label>Temperature (°C)<br><input id="d-temp" type="number" step="0.5" min="5" max="35" value="${currentTemp}" /></label>
       </div>
@@ -564,9 +617,9 @@ class VestaPanel extends HTMLElement {
         </div>
         <div class="day-checkboxes">${dayCheckboxes}</div>
       </fieldset>
-      <div class="dialog-error hidden" id="d-error"></div>
+      <div class="dialog-error hidden" id="d-error" role="alert"></div>
       <div class="dialog-actions">
-        ${isEdit ? `<button class="btn-primary danger" id="d-delete-block">Delete</button>` : ""}
+        ${isEdit ? `<button class="btn-primary danger" id="d-delete-block">Delete block</button>` : ""}
         <button data-dialog-cancel class="btn-secondary">Cancel</button>
         <button data-dialog-submit class="btn-primary">Save</button>
       </div>
@@ -577,76 +630,69 @@ class VestaPanel extends HTMLElement {
       const temp = container.querySelector("#d-temp")?.value;
       const days = Array.from(container.querySelectorAll(".day-cb input:checked")).map(el => Number(el.value));
 
+      const err = container.querySelector("#d-error");
       if (days.length === 0) {
-        container.querySelector("#d-error").textContent = "Select at least one day.";
-        container.querySelector("#d-error").classList.remove("hidden");
-        return;
+        err.textContent = "Select at least one day."; err.classList.remove("hidden"); return;
       }
       if (timeToMinutes(start) >= timeToMinutes(end)) {
-        container.querySelector("#d-error").textContent = "Start time must be before end time.";
-        container.querySelector("#d-error").classList.remove("hidden");
-        return;
+        err.textContent = "Start time must be before end time."; err.classList.remove("hidden"); return;
       }
-
       const mode = modeVal === "custom" ? `temp:${parseFloat(temp).toFixed(1)}` : modeVal;
       const newBlock = { days, start, end, mode };
-
       let blocks = [...(this._selectedSchedule.blocks || [])];
-      if (isEdit && existingIndex >= 0) {
-        blocks.splice(existingIndex, 1, newBlock);
-      } else {
-        blocks.push(newBlock);
-      }
-
+      if (isEdit && existingIndex >= 0) blocks.splice(existingIndex, 1, newBlock);
+      else blocks.push(newBlock);
       try {
         await this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, blocks });
         this._closeDialog();
         await this._selectSchedule(this._selectedId);
       } catch (e) {
-        const msg = e.message || (typeof e === "object" ? JSON.stringify(e) : String(e));
-        container.querySelector("#d-error").textContent = "Error: " + msg;
-        container.querySelector("#d-error").classList.remove("hidden");
+        err.textContent = "Error: " + (e.message || (typeof e === "object" ? JSON.stringify(e) : String(e)));
+        err.classList.remove("hidden");
       }
     });
 
-    // Quick day selection buttons
-    this.shadowRoot.getElementById("dialog-container").querySelectorAll(".btn-day-quick").forEach(btn => {
+    const dc = this.shadowRoot.getElementById("dialog-container");
+
+    dc.querySelectorAll(".btn-day-quick").forEach(btn => {
       btn.addEventListener("click", () => {
         const selected = new Set(btn.dataset.days.split(",").map(Number));
-        this.shadowRoot.getElementById("dialog-container").querySelectorAll(".day-cb input").forEach(cb => {
-          cb.checked = selected.has(Number(cb.value));
-        });
+        dc.querySelectorAll(".day-cb input").forEach(cb => { cb.checked = selected.has(Number(cb.value)); });
       });
     });
 
-    // Toggle custom temp field
-    this.shadowRoot.getElementById("dialog-container").querySelector("#d-mode")?.addEventListener("change", (e) => {
-      const tempRow = this.shadowRoot.getElementById("dialog-container").querySelector("#d-temp-row");
+    dc.querySelector("#d-mode")?.addEventListener("change", (e) => {
+      const tempRow = dc.querySelector("#d-temp-row");
       if (tempRow) tempRow.style.display = e.target.value === "custom" ? "block" : "none";
     });
 
-    // Delete block button
+    // Delete with inline confirmation (two-tap pattern)
     if (isEdit && existingIndex >= 0) {
-      this.shadowRoot.getElementById("dialog-container").querySelector("#d-delete-block")?.addEventListener("click", async () => {
-        const blocks = [...(this._selectedSchedule.blocks || [])];
-        blocks.splice(existingIndex, 1);
-        try {
-          await this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, blocks });
-          this._closeDialog();
-          await this._selectSchedule(this._selectedId);
-        } catch (e) {
-          console.error(e);
+      dc.querySelector("#d-delete-block")?.addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        if (btn.dataset.confirm === "1") {
+          const blocks = [...(this._selectedSchedule.blocks || [])];
+          blocks.splice(existingIndex, 1);
+          this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, blocks })
+            .then(() => { this._closeDialog(); return this._selectSchedule(this._selectedId); })
+            .catch(err => console.error(err));
+        } else {
+          btn.dataset.confirm = "1";
+          btn.textContent = "Confirm delete?";
+          btn.style.outline = "2px solid #e53935";
+          setTimeout(() => {
+            btn.dataset.confirm = "0";
+            btn.textContent = "Delete block";
+            btn.style.outline = "";
+          }, 3000);
         }
       });
     }
   }
 
-  async _assignRoom(entryId, source, scheduleId) {
-    const msg = {
-      type: "vesta/rooms/assign",
-      entry_id: entryId,
-      schedule_source: source,
-    };
+  async _assignRoom(entryId, source, scheduleId, triggerBtn) {
+    if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "Saving…"; }
+    const msg = { type: "vesta/rooms/assign", entry_id: entryId, schedule_source: source };
     if (source === "vesta") msg.vesta_schedule_id = scheduleId;
     try {
       await this._ws(msg);
@@ -654,11 +700,17 @@ class VestaPanel extends HTMLElement {
       this._render();
     } catch (e) {
       console.error("Assign room error", e);
+      if (triggerBtn) {
+        triggerBtn.disabled = false;
+        triggerBtn.textContent = source === "vesta" ? "Assign" : "Reset to global";
+      }
     }
   }
 
   _escape(str) {
-    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return String(str)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   // -----------------------------------------------------------------------
@@ -674,121 +726,178 @@ class VestaPanel extends HTMLElement {
       /* Sidebar */
       .sidebar { width: 240px; min-width: 200px; background: var(--card-background-color, #fff);
         border-right: 1px solid var(--divider-color, #e0e0e0); display: flex; flex-direction: column; overflow: hidden; }
+      .sidebar-drawer { position: fixed; top: 0; left: 0; height: 100%; width: 280px; z-index: 200;
+        box-shadow: 2px 0 16px rgba(0,0,0,0.25); transform: translateX(-100%); transition: transform 0.2s ease; }
+      .sidebar-drawer.sidebar-open { transform: translateX(0); }
+      .sidebar-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 199; }
       .sidebar-header { display: flex; align-items: center; justify-content: space-between;
         padding: 12px 16px; border-bottom: 1px solid var(--divider-color, #e0e0e0); }
       .logo { font-size: 1.1em; font-weight: 600; color: var(--primary-color, #03a9f4); }
       .schedule-list { flex: 1; overflow-y: auto; padding: 8px 0; }
       .schedule-item { display: flex; align-items: center; justify-content: space-between;
-        padding: 8px 12px; cursor: pointer; border-radius: 6px; margin: 2px 8px; }
+        padding: 10px 12px; cursor: pointer; border-radius: 6px; margin: 2px 8px; transition: background 0.1s; }
       .schedule-item:hover { background: var(--secondary-background-color, #f0f0f0); }
+      .schedule-item:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 1px; }
       .schedule-item.active { background: var(--primary-color, #03a9f4); color: #fff; }
       .schedule-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.95em; }
       .schedule-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
-      .schedule-item:hover .schedule-actions, .schedule-item.active .schedule-actions { opacity: 1; }
-      .empty-list { padding: 24px 16px; color: var(--secondary-text-color, #888); font-size: 0.9em; text-align: center; }
+      .schedule-item:hover .schedule-actions,
+      .schedule-item.active .schedule-actions,
+      .schedule-item:focus-within .schedule-actions { opacity: 1; }
+      .empty-list { padding: 24px 16px; color: var(--secondary-text-color, #888); font-size: 0.9em; text-align: center; line-height: 1.5; }
+
+      /* Mobile top bar */
+      .mobile-topbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+        background: var(--card-background-color, #fff); border-bottom: 1px solid var(--divider-color, #e0e0e0); }
+      .mobile-topbar-title { font-weight: 600; font-size: 1em; flex: 1;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
       /* Main */
-      .main { flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column; }
-      .main-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+      .main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+      .main-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
       .main-empty-icon { font-size: 3em; }
       .main-empty-text { color: var(--secondary-text-color, #888); }
-      .main-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px 8px;
-        border-bottom: 1px solid var(--divider-color, #e0e0e0); background: var(--card-background-color, #fff); }
+      .main-header { display: flex; align-items: center; justify-content: space-between;
+        padding: 16px 24px 8px; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        background: var(--card-background-color, #fff); flex-wrap: wrap; gap: 8px; }
       .schedule-title { margin: 0; font-size: 1.2em; font-weight: 600; }
-      .main-actions { display: flex; gap: 8px; }
+      .main-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
       /* Tabs */
-      .tab-bar { display: flex; gap: 0; padding: 0 24px;
-        border-bottom: 2px solid var(--divider-color, #e0e0e0); background: var(--card-background-color, #fff); }
+      .tab-bar { display: flex; padding: 0 24px;
+        border-bottom: 2px solid var(--divider-color, #e0e0e0);
+        background: var(--card-background-color, #fff); }
       .tab { background: none; border: none; padding: 10px 20px; cursor: pointer; font-size: 0.95em;
         color: var(--secondary-text-color, #888); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+      .tab:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: -2px; border-radius: 2px; }
       .tab.active { color: var(--primary-color, #03a9f4); border-bottom-color: var(--primary-color, #03a9f4); font-weight: 500; }
 
       /* Grid */
       .grid-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 12px 24px 8px; }
-      .legend-item { display: flex; align-items: center; gap: 4px; font-size: 0.85em; }
-      .legend-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-      .grid-wrapper { display: flex; flex: 1; padding: 0 24px 24px; overflow-x: auto; min-height: 0; }
+      .legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.85em; }
+      .legend-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+      .grid-wrapper { display: flex; flex: 1; padding: 0 24px 24px; overflow: auto; min-height: 0; }
       .grid-wrapper.mobile { padding: 0 16px 24px; }
-      .time-axis { width: 48px; min-width: 48px; position: relative; padding-top: 32px; }
-      .time-tick { position: absolute; left: 0; right: 0; font-size: 0.75em; color: var(--secondary-text-color, #888);
-        text-align: right; padding-right: 6px; transform: translateY(-50%); white-space: nowrap; }
+      .time-axis { width: 52px; min-width: 52px; position: relative; padding-top: 32px; flex-shrink: 0; }
+      .time-tick { position: absolute; left: 0; right: 0; font-size: 0.75em;
+        color: var(--secondary-text-color, #888); text-align: right; padding-right: 6px;
+        transform: translateY(-50%); white-space: nowrap; }
       .grid-days { display: flex; flex: 1; gap: 2px; min-width: 0; }
       .grid-days.single { flex: 1; }
-      .col { flex: 1; display: flex; flex-direction: column; min-width: 60px; }
-      .col-header { text-align: center; font-size: 0.8em; font-weight: 600; color: var(--secondary-text-color, #888);
-        padding: 4px 0 8px; height: 32px; }
+      .col { flex: 1; display: flex; flex-direction: column; min-width: 72px; }
+      .col-header { text-align: center; font-size: 0.8em; font-weight: 600;
+        color: var(--secondary-text-color, #888); padding: 4px 0 8px; height: 32px; }
       .col-body { position: relative; border-radius: 4px; border: 1px solid var(--divider-color, #e0e0e0);
         background: var(--secondary-background-color, #f9f9f9)
           repeating-linear-gradient(to bottom,
-            transparent 0px, transparent 47px,
-            var(--divider-color, #e0e0e0) 47px, var(--divider-color, #e0e0e0) 48px); }
+            transparent 0px, transparent ${HOUR_HEIGHT - 1}px,
+            var(--divider-color, #e0e0e0) ${HOUR_HEIGHT - 1}px,
+            var(--divider-color, #e0e0e0) ${HOUR_HEIGHT}px); }
       .block { position: absolute; left: 2px; right: 2px; border-radius: 4px; cursor: pointer;
         transition: filter 0.15s; overflow: hidden; display: flex; align-items: flex-start;
-        padding: 2px 4px; }
-      .block:hover { filter: brightness(0.9); }
+        padding: 2px 4px; min-height: 18px; }
+      .block:hover { filter: brightness(0.88); }
+      .block:focus-visible { outline: 2px solid #fff; outline-offset: -2px; filter: brightness(0.88); }
       .block-label { font-size: 0.72em; color: #fff; font-weight: 600; white-space: nowrap;
-        text-overflow: ellipsis; overflow: hidden; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+        text-overflow: ellipsis; overflow: hidden;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5); pointer-events: none; }
 
       /* Mobile nav */
-      .mobile-nav { display: flex; align-items: center; justify-content: center; gap: 16px;
-        padding: 12px 24px 4px; }
+      .mobile-nav { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 8px 24px 4px; }
       .mobile-day-label { font-weight: 600; font-size: 1.05em; min-width: 100px; text-align: center; }
+      .btn-nav { font-size: 1.5em; min-width: 44px; min-height: 44px; }
+      .day-select-row { display: flex; gap: 4px; padding: 0 16px 8px; flex-wrap: wrap; }
+      .btn-day-select { background: var(--secondary-background-color, #eee);
+        border: 1px solid var(--divider-color, #ccc); border-radius: 4px;
+        padding: 6px 10px; font-size: 0.85em; cursor: pointer; min-height: 36px; min-width: 44px; }
+      .btn-day-select:hover { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
+      .btn-day-select.active { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; font-weight: 600; }
 
       /* Rooms tab */
       .rooms-tab { padding: 16px 24px; }
       .rooms-desc { color: var(--secondary-text-color, #888); margin: 0 0 16px; font-size: 0.9em; }
-      .rooms-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+      .rooms-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .rooms-table { width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 320px; }
       .rooms-table th, .rooms-table td { text-align: left; padding: 8px 12px;
         border-bottom: 1px solid var(--divider-color, #e0e0e0); }
       .rooms-table th { font-weight: 600; color: var(--secondary-text-color, #888); font-size: 0.85em; }
       .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 500; }
       .badge.vesta { background: var(--primary-color, #03a9f4); color: #fff; }
-      .badge.inherit { background: var(--secondary-background-color, #e0e0e0); color: var(--secondary-text-color, #666); }
+      .badge.inherit { background: var(--secondary-background-color, #e0e0e0); color: var(--secondary-text-color, #555); }
       .room-source { white-space: nowrap; }
 
       /* Buttons */
       .btn-primary { background: var(--primary-color, #03a9f4); color: #fff; border: none;
-        padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 500; }
+        padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 500; min-height: 36px; }
       .btn-primary:hover { filter: brightness(0.9); }
+      .btn-primary:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+      .btn-primary:disabled { opacity: 0.6; cursor: default; }
       .btn-primary.danger { background: #e53935; }
-      .btn-secondary { background: none; border: 1px solid var(--divider-color, #ccc); color: var(--primary-text-color, #333);
-        padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; }
+      .btn-secondary { background: none; border: 1px solid var(--divider-color, #ccc);
+        color: var(--primary-text-color, #333); padding: 8px 16px; border-radius: 6px;
+        cursor: pointer; font-size: 0.9em; min-height: 36px; }
       .btn-secondary:hover { background: var(--secondary-background-color, #f0f0f0); }
+      .btn-secondary:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+      .btn-secondary:disabled { opacity: 0.6; cursor: default; }
       .btn-icon { background: none; border: none; cursor: pointer; font-size: 1.2em;
-        color: var(--primary-text-color, #333); padding: 4px 8px; border-radius: 4px; line-height: 1; }
+        color: var(--primary-text-color, #333); padding: 8px; border-radius: 4px; line-height: 1;
+        min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
       .btn-icon:hover { background: var(--secondary-background-color, #f0f0f0); }
+      .btn-icon:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
       .btn-icon-sm { background: none; border: none; cursor: pointer; font-size: 0.9em;
-        padding: 2px 5px; border-radius: 3px; color: inherit; line-height: 1; }
+        padding: 4px 6px; border-radius: 3px; color: inherit; line-height: 1;
+        min-width: 28px; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; }
       .btn-icon-sm:hover { background: rgba(0,0,0,0.1); }
       .btn-icon-sm.danger { color: #e53935; }
-      .btn-sm { padding: 4px 10px; font-size: 0.85em; }
+      .btn-sm { padding: 6px 12px; font-size: 0.85em; min-height: 34px; }
 
       /* Dialog */
       .dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; }
       .dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
         background: var(--card-background-color, #fff); border-radius: 12px; padding: 24px 28px;
-        min-width: 320px; max-width: 480px; width: 90%; z-index: 101;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
-      .dialog h3 { margin: 0 0 16px; font-size: 1.1em; }
+        min-width: 300px; max-width: 480px; width: 92vw; z-index: 101;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; }
+      .dialog-close { position: absolute; top: 10px; right: 10px; background: none; border: none;
+        cursor: pointer; font-size: 1em; color: var(--secondary-text-color, #888);
+        padding: 6px 8px; border-radius: 4px; line-height: 1; min-width: 32px; min-height: 32px;
+        display: inline-flex; align-items: center; justify-content: center; }
+      .dialog-close:hover { background: var(--secondary-background-color, #f0f0f0); }
+      .dialog h3 { margin: 0 0 16px; font-size: 1.1em; padding-right: 36px; }
       .dialog label { display: block; margin-bottom: 12px; font-size: 0.9em; color: var(--secondary-text-color, #666); }
-      .dialog input, .dialog select { width: 100%; margin-top: 4px; padding: 7px 10px;
+      .dialog input, .dialog select { width: 100%; margin-top: 4px; padding: 8px 10px;
         border: 1px solid var(--divider-color, #ccc); border-radius: 6px; font-size: 0.95em;
-        background: var(--primary-background-color, #fff); color: var(--primary-text-color, #333); }
+        background: var(--primary-background-color, #fff); color: var(--primary-text-color, #333);
+        min-height: 38px; }
+      .dialog input:focus, .dialog select:focus { outline: 2px solid var(--primary-color, #03a9f4); border-color: transparent; }
       .form-row { display: flex; gap: 12px; }
       .form-row label { flex: 1; }
-      fieldset { border: 1px solid var(--divider-color, #ccc); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
+      fieldset { border: 1px solid var(--divider-color, #ccc); border-radius: 6px;
+        padding: 8px 12px; margin-bottom: 12px; }
       fieldset legend { font-size: 0.85em; color: var(--secondary-text-color, #666); padding: 0 4px; }
-      .day-quick-btns { display: flex; gap: 6px; margin-bottom: 8px; }
-      .btn-day-quick { background: var(--secondary-background-color, #eee); border: 1px solid var(--divider-color, #ccc);
-        border-radius: 4px; padding: 2px 10px; font-size: 0.8em; cursor: pointer; }
+      .day-quick-btns { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+      .btn-day-quick { background: var(--secondary-background-color, #eee);
+        border: 1px solid var(--divider-color, #ccc); border-radius: 4px;
+        padding: 4px 12px; font-size: 0.8em; cursor: pointer; min-height: 30px; }
       .btn-day-quick:hover { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
       .day-checkboxes { display: flex; flex-wrap: wrap; gap: 6px; }
-      .day-cb { display: flex; align-items: center; gap: 4px; font-size: 0.9em; cursor: pointer; }
-      .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-      .dialog-error { color: #e53935; font-size: 0.85em; margin-top: 4px; padding: 6px 8px;
-        background: #ffebee; border-radius: 4px; }
+      .day-cb { display: flex; align-items: center; gap: 4px; font-size: 0.9em; cursor: pointer;
+        padding: 3px 0; min-height: 28px; }
+      .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+      .dialog-error { color: #c62828; font-size: 0.85em; margin-top: 4px; padding: 6px 8px;
+        background: #ffebee; border-radius: 4px; border-left: 3px solid #e53935; }
       .hidden { display: none !important; }
+
+      @media (max-width: 480px) {
+        .form-row { flex-direction: column; gap: 0; }
+        .dialog { padding: 20px 16px; }
+        .dialog-actions { justify-content: stretch; }
+        .dialog-actions button { flex: 1; justify-content: center; }
+        .main-header { padding: 12px 16px 8px; }
+        .tab-bar { padding: 0 12px; }
+        .tab { padding: 10px 12px; font-size: 0.9em; }
+        .rooms-tab { padding: 12px 16px; }
+        .grid-legend { padding: 8px 16px 6px; }
+      }
     `;
   }
 }
