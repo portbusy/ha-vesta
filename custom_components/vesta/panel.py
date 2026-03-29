@@ -1,11 +1,21 @@
 """Register the Vesta schedule panel in the Home Assistant sidebar."""
 from __future__ import annotations
 
+import json
 import pathlib
 
 from homeassistant.components import panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
+
+_MANIFEST = pathlib.Path(__file__).parent / "manifest.json"
+
+
+def _version() -> str:
+    try:
+        return json.loads(_MANIFEST.read_text())["version"]
+    except Exception:
+        return "0"
 
 
 async def async_setup_panel(hass: HomeAssistant) -> None:
@@ -27,7 +37,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         frontend_url_path="vesta",
         sidebar_title="Vesta",
         sidebar_icon="mdi:thermometer-auto",
-        module_url=f"{static_url}/vesta-panel.js",
+        module_url=f"{static_url}/vesta-panel.js?v={_version()}",
         embed_iframe=False,
         require_admin=False,
     )
