@@ -56,6 +56,7 @@ class VestaPanel extends HTMLElement {
     this._mobileDayIndex = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
     this._narrow = window.innerWidth < 700;
     this._sidebarOpen = false;
+    this._nowTimer = null;
     this._resizeObserver = new ResizeObserver(() => {
       const wasNarrow = this._narrow;
       this._narrow = this.offsetWidth < 700;
@@ -72,8 +73,27 @@ class VestaPanel extends HTMLElement {
     }
   }
 
-  connectedCallback() { this._render(); }
-  disconnectedCallback() { this._resizeObserver.disconnect(); }
+  connectedCallback() {
+    this._render();
+    this._startNowTimer();
+  }
+  disconnectedCallback() {
+    this._resizeObserver.disconnect();
+    if (this._nowTimer) { clearInterval(this._nowTimer); this._nowTimer = null; }
+  }
+
+  _nowTopPx() {
+    const now = new Date();
+    return (now.getHours() * 60 + now.getMinutes()) / 60 * HOUR_HEIGHT + COL_HEADER_HEIGHT - 1;
+  }
+
+  _startNowTimer() {
+    if (this._nowTimer) clearInterval(this._nowTimer);
+    this._nowTimer = setInterval(() => {
+      const line = this.shadowRoot?.querySelector('#now-line');
+      if (line) line.style.top = `${this._nowTopPx()}px`;
+    }, 60000);
+  }
 
   async _ws(msg) {
     return this._hass.connection.sendMessagePromise(msg);
@@ -212,8 +232,11 @@ class VestaPanel extends HTMLElement {
     const s = this._selectedSchedule;
     const blocks = s.blocks || [];
     const TOTAL_HEIGHT = 24 * HOUR_HEIGHT;
+    const todayIndex = (new Date().getDay() + 6) % 7;
+    const nowTop = this._nowTopPx();
 
     const columns = DAY_NAMES.map((day, di) => {
+      const isToday = di === todayIndex;
       const dayBlocks = blocks.map((b, idx) => ({ b, idx })).filter(({ b }) => (b.days || []).includes(di));
       const blockHtml = dayBlocks.map(({ b: block, idx }) => {
         const startMin = timeToMinutes(block.start);
@@ -228,8 +251,8 @@ class VestaPanel extends HTMLElement {
                 </div>`;
       }).join("");
       return `<div class="col">
-        <div class="col-header">${day}</div>
-        <div class="col-body" style="height:${TOTAL_HEIGHT}px" data-day="${di}">${blockHtml}</div>
+        <div class="col-header${isToday ? " today" : ""}">${day}</div>
+        <div class="col-body${isToday ? " today" : ""}" style="height:${TOTAL_HEIGHT}px" data-day="${di}">${blockHtml}</div>
       </div>`;
     }).join("");
 
@@ -243,7 +266,10 @@ class VestaPanel extends HTMLElement {
       ).join("")}</div>
       <div class="grid-wrapper">
         <div class="time-axis" aria-hidden="true">${timeAxis}</div>
-        <div class="grid-days">${columns}</div>
+        <div class="grid-days">
+          ${columns}
+          <div class="now-line" id="now-line" style="top:${nowTop}px" aria-hidden="true"></div>
+        </div>
       </div>
     `;
   }
@@ -268,10 +294,17 @@ class VestaPanel extends HTMLElement {
                 </div>`;
       }).join("");
 
-    const dayButtons = DAY_NAMES.map((name, i) =>
-      `<button class="btn-day-select ${i === this._mobileDayIndex ? "active" : ""}" data-day="${i}"
-               aria-pressed="${i === this._mobileDayIndex}">${name}</button>`
-    ).join("");
+    const todayIndex = (new Date().getDay() + 6) % 7;
+    const nowTop = this._nowTopPx();
+
+    const dayButtons = DAY_NAMES.map((name, i) => {
+      const isToday = i === todayIndex;
+      const isActive = i === this._mobileDayIndex;
+      return `<button class="btn-day-select ${isActive ? "active" : ""}${isToday ? " today-btn" : ""}" data-day="${i}"
+               aria-pressed="${isActive}">${name}</button>`;
+    }).join("");
+
+    const isViewingToday = this._mobileDayIndex === todayIndex;
 
     return `
       <div class="mobile-nav">
@@ -288,9 +321,10 @@ class VestaPanel extends HTMLElement {
           `<div class="time-tick" style="top:${i * HOUR_HEIGHT + COL_HEADER_HEIGHT}px">${pad(i)}:00</div>`).join("")}</div>
         <div class="grid-days single">
           <div class="col" style="flex:1">
-            <div class="col-header">${DAY_NAMES[this._mobileDayIndex]}</div>
+            <div class="col-header${isViewingToday ? " today" : ""}">${DAY_NAMES[this._mobileDayIndex]}</div>
             <div class="col-body" style="height:${TOTAL_HEIGHT}px" data-day="${this._mobileDayIndex}">${blockHtml}</div>
           </div>
+          ${isViewingToday ? `<div class="now-line" id="now-line" style="top:${nowTop}px" aria-hidden="true"></div>` : ""}
         </div>
       </div>
     `;
@@ -818,11 +852,18 @@ class VestaPanel extends HTMLElement {
       .time-tick { position: absolute; left: 0; right: 0; font-size: 0.75em;
         color: var(--secondary-text-color, #888); text-align: right; padding-right: 6px;
         transform: translateY(-50%); white-space: nowrap; }
-      .grid-days { display: flex; flex: 1; gap: 2px; min-width: 0; }
+      .grid-days { display: flex; flex: 1; gap: 2px; min-width: 0; position: relative; }
       .grid-days.single { flex: 1; }
       .col { flex: 1; display: flex; flex-direction: column; min-width: 72px; }
       .col-header { text-align: center; font-size: 0.8em; font-weight: 600;
         color: var(--secondary-text-color, #888); padding: 4px 0 8px; height: 32px; }
+      .col-header.today { color: var(--primary-color, #03a9f4); font-weight: 700; }
+      .now-line { position: absolute; left: 0; right: 0; height: 2px;
+        background: var(--error-color, #e53935); z-index: 2; pointer-events: none; }
+      .now-line::before { content: ''; position: absolute; left: -5px; top: -4px;
+        width: 10px; height: 10px; border-radius: 50%;
+        background: var(--error-color, #e53935); }
+      .today-btn { color: var(--primary-color, #03a9f4); font-weight: 700; }
       .col-body { position: relative; border-radius: 4px; border: 1px solid var(--divider-color, #e0e0e0);
         background: var(--secondary-background-color, #f9f9f9)
           repeating-linear-gradient(to bottom,
