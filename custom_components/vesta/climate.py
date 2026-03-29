@@ -1178,7 +1178,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             min_dist = 999999.0
             for pid in presence_ids:
                 if p_state := self.hass.states.get(pid):
-                    if p_state.state == "home":
+                    if p_state.state in ("home", STATE_ON):
                         any_home = True
                         min_dist = 0.0
                         break
@@ -1190,14 +1190,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         and self.hass.config.latitude is not None
                         and self.hass.config.longitude is not None
                     ):
-                        dist = location.distance(
-                            lat,
-                            lon,
-                            self.hass.config.latitude,
-                            self.hass.config.longitude,
-                        )
-                        if dist < min_dist:
-                            min_dist = dist
+                        try:
+                            dist = location.distance(
+                                float(lat),
+                                float(lon),
+                                self.hass.config.latitude,
+                                self.hass.config.longitude,
+                            )
+                            if dist < min_dist:
+                                min_dist = dist
+                        except (TypeError, ValueError):
+                            pass
 
             self._nearest_distance = min_dist
             ovr_mode = self._get_manual_override_mode()

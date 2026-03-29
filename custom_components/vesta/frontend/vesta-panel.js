@@ -12,7 +12,8 @@ const MODES = {
   custom:  { label: "Custom",  color: "#C2185B" },   // darkened from #E91E63
 };
 
-const HOUR_HEIGHT = 40; // px per hour (24h = 960px total)
+const HOUR_HEIGHT = 40;        // px per hour (24h = 960px total)
+const COL_HEADER_HEIGHT = 32;  // px — must match .col-header height in CSS
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_NAMES_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -233,7 +234,7 @@ class VestaPanel extends HTMLElement {
     }).join("");
 
     const timeAxis = Array.from({ length: 25 }, (_, i) =>
-      `<div class="time-tick" style="top:${i * HOUR_HEIGHT}px">${pad(i)}:00</div>`
+      `<div class="time-tick" style="top:${i * HOUR_HEIGHT + COL_HEADER_HEIGHT}px">${pad(i)}:00</div>`
     ).join("");
 
     return `
@@ -284,7 +285,7 @@ class VestaPanel extends HTMLElement {
       ).join("")}</div>
       <div class="grid-wrapper mobile">
         <div class="time-axis" aria-hidden="true">${Array.from({ length: 25 }, (_, i) =>
-          `<div class="time-tick" style="top:${i * HOUR_HEIGHT}px">${pad(i)}:00</div>`).join("")}</div>
+          `<div class="time-tick" style="top:${i * HOUR_HEIGHT + COL_HEADER_HEIGHT}px">${pad(i)}:00</div>`).join("")}</div>
         <div class="grid-days single">
           <div class="col" style="flex:1">
             <div class="col-header">${DAY_NAMES[this._mobileDayIndex]}</div>
@@ -813,7 +814,7 @@ class VestaPanel extends HTMLElement {
       .legend-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
       .grid-wrapper { display: flex; flex: 1; padding: 0 24px 24px; overflow: auto; min-height: 0; }
       .grid-wrapper.mobile { padding: 0 16px 24px; }
-      .time-axis { width: 52px; min-width: 52px; position: relative; padding-top: 32px; flex-shrink: 0; }
+      .time-axis { width: 52px; min-width: 52px; position: relative; flex-shrink: 0; }
       .time-tick { position: absolute; left: 0; right: 0; font-size: 0.75em;
         color: var(--secondary-text-color, #888); text-align: right; padding-right: 6px;
         transform: translateY(-50%); white-space: nowrap; }
