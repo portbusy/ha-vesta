@@ -51,7 +51,9 @@ class BoilerCoordinator:
             heater_states = getattr(room, "_heater_states", {})
             if any(heater_states.values()):
                 any_heating = True
-                target = getattr(room, "_target_temp", None) or room.comfort_temp
+                target = getattr(room, "_target_temp", None)
+                if target is None:
+                    target = room.comfort_temp
                 active_setpoints.append(float(target))
 
         domain = self._boiler_id.split(".")[0]
@@ -67,45 +69,115 @@ class BoilerCoordinator:
             temp_changed = boiler_on and flow_temp != self._last_flow_temp
 
             if boiler_changed or temp_changed:
+                try:
+                    if boiler_on:
+                        await self._hass.services.async_call(
+                            "climate",
+                            "set_hvac_mode",
+                            {"entity_id": self._boiler_id, "hvac_mode": "heat"},
+                        )
+                        await self._hass.services.async_call(
+                            "climate",
+                            "set_temperature",
+                            {"entity_id": self._boiler_id, "temperature": flow_temp},
+                        )
+                    else:
+                        await self._hass.services.async_call(
+                            "climate",
+                            "set_hvac_mode",
+                            {"entity_id": self._boiler_id, "hvac_mode": "off"},
+                        )
+                except Exception:
+                    _LOGGER.exception("Error updating boiler %s", self._boiler_id)
+                    return  # Don't update internal state on failure
                 self._last_boiler_on = boiler_on
-                if boiler_on:
-                    self._last_flow_temp = flow_temp
-                    await self._hass.services.async_call(
-                        "climate",
-                        "set_hvac_mode",
-                        {"entity_id": self._boiler_id, "hvac_mode": "heat"},
-                    )
-                    await self._hass.services.async_call(
-                        "climate",
-                        "set_temperature",
-                        {"entity_id": self._boiler_id, "temperature": flow_temp},
-                    )
-                else:
-                    self._last_flow_temp = None
-                    await self._hass.services.async_call(
-                        "climate",
-                        "set_hvac_mode",
-                        {"entity_id": self._boiler_id, "hvac_mode": "off"},
-                    )
+                self._last_flow_temp = flow_temp if boiler_on else None
         else:
             # Switch or input_boolean: simple on/off
             if self._last_boiler_on != any_heating:
+                try:
+                    await self._hass.services.async_call(
+                        "homeassistant",
+                        "turn_on" if any_heating else "turn_off",
+                        {"entity_id": self._boiler_id},
+                    )
+                except Exception:
+                    _LOGGER.exception("Error updating boiler %s", self._boiler_id)
+                    return
                 self._last_boiler_on = any_heating
-                await self._hass.services.async_call(
-                    "homeassistant",
-                    "turn_on" if any_heating else "turn_off",
-                    {"entity_id": self._boiler_id},
-                )
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate config entries from older schema versions to the current one."""
+    from .const import (
+        ENTRY_TYPE_GLOBAL,
+        CONF_ENTRY_TYPE,
+        CONF_VACATION_ENTITY,
+        CONF_VACATION_STATE,
+        CONF_HEATING_SEASON_ENTITY,
+        CONF_HEATING_SEASON_ACTIVE,
+        CONF_HEATING_SEASON_OFFMODE,
+        CONF_BOILER_ENTITY,
+        CONF_BOILER_OFFSET,
+        CONF_SCHEDULE_SOURCE,
+        CONF_VESTA_SCHEDULE_ID,
+        CONF_MANUAL_OVERRIDE_MODE,
+        CONF_MANUAL_OVERRIDE_HOURS,
+        CONF_AVG_SPEED,
+        CONF_WINDOW_DELAY,
+        SEASON_OFFMODE_OPEN,
+        MANUAL_OVERRIDE_TIMER,
+        SCHEDULE_SOURCE_ENTITY,
+    )
     _LOGGER.debug(
         "Migrating Vesta config entry from version %s to %s",
         config_entry.version,
         _CURRENT_VERSION,
     )
-    hass.config_entries.async_update_entry(config_entry, version=_CURRENT_VERSION)
+    data = dict(config_entry.data)
+    is_global = data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_GLOBAL
+    v = config_entry.version
+
+    # v1 → v2: vacation entity support added
+    if v < 2:
+        data.setdefault(CONF_VACATION_STATE, False)
+        data.setdefault(CONF_VACATION_ENTITY, None)
+
+    # v2 → v3: heating season support added
+    if v < 3:
+        data.setdefault(CONF_HEATING_SEASON_ACTIVE, True)
+        data.setdefault(CONF_HEATING_SEASON_ENTITY, None)
+        data.setdefault(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
+
+    # v3 → v4: boiler coordinator support added
+    if v < 4 and is_global:
+        data.setdefault(CONF_BOILER_ENTITY, None)
+        data.setdefault(CONF_BOILER_OFFSET, 5.0)
+
+    # v4 → v5: Vesta native schedule source added
+    if v < 5:
+        data.setdefault(CONF_SCHEDULE_SOURCE, SCHEDULE_SOURCE_ENTITY)
+        data.setdefault(CONF_VESTA_SCHEDULE_ID, None)
+
+    # v5 → v6: manual override mode options added
+    if v < 6 and is_global:
+        data.setdefault(CONF_MANUAL_OVERRIDE_MODE, MANUAL_OVERRIDE_TIMER)
+        data.setdefault(CONF_MANUAL_OVERRIDE_HOURS, 2.0)
+        data.setdefault(CONF_AVG_SPEED, 50.0)
+
+    # v6 → v7: window delay added per-room
+    if v < 7 and not is_global:
+        data.setdefault(CONF_WINDOW_DELAY, 0)
+
+    hass.config_entries.async_update_entry(
+        config_entry, data=data, version=_CURRENT_VERSION
+    )
+    _LOGGER.info(
+        "Successfully migrated Vesta config entry '%s' from v%s to v%s",
+        config_entry.title,
+        v,
+        _CURRENT_VERSION,
+    )
     return True
 
 

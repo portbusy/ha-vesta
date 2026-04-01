@@ -227,6 +227,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._stuck_check_temp: float | None = None
         self._window_stuck_warned: bool = False        # fix 8: stuck window sensor
         self._event_listeners: list = []
+        self._tick_running: bool = False
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -284,6 +285,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             # Internal state (used by RestoreEntity)
             "_schedule_state_at_override": self._schedule_state_at_override,
             "_manual_paused_for_away": self._manual_paused_for_away,
+            "_last_usage_reset_date": (
+                self._last_usage_reset_date.isoformat()
+                if self._last_usage_reset_date is not None
+                else None
+            ),
             # Internal monthly state (used by RestoreEntity)
             "_monthly_actual_heating_s": self._monthly_actual_heating_s,
             "_monthly_away_s": self._monthly_away_s,
@@ -296,7 +302,32 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "_last_savings_reset_month": self._last_savings_reset_month,
         }
         attrs.update(self._compute_savings_est())
+        attrs["active_control_reason"] = self._active_control_reason()
         return attrs
+
+    def _active_control_reason(self) -> str:
+        """Return a human-readable string explaining the current control decision."""
+        if self._hvac_mode == HVACMode.OFF:
+            return "hvac_off"
+        if self._emergency_heat_active:
+            return "emergency_heat"
+        if self._vacation_active or self._preset_mode == MODE_VACATION:
+            return "vacation_frost_protection"
+        if not self._heating_season_active:
+            if self._cur_temp is not None and self._cur_temp < ANTI_FROST_TEMP:
+                return "off_season_frost_risk"
+            return "heating_season_off"
+        if self._window_open:
+            return "window_open"
+        if self._force_return:
+            return "pre_heating_return"
+        if self._preset_mode == MODE_MANUAL:
+            return "manual_override"
+        if self._preset_mode == MODE_AWAY:
+            return "away_mode"
+        if self._preset_mode == MODE_SMART_SCHEDULE:
+            return "smart_schedule"
+        return "normal"
 
     def _get_manual_override_mode(self) -> str:
         """Return the effective manual override revert mode for this room."""
@@ -516,6 +547,24 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def _async_tick(self, now):
         """Robust Heartbeat with Fail-Safe checks."""
+        # Guard: if this entity has been removed from hass (e.g. during reload) skip
+        if self._entry.entry_id not in self.hass.data.get(DOMAIN, {}).get(
+            "climate_entities_by_entry", {}
+        ):
+            return
+
+        # Guard: prevent concurrent tick executions (can happen when multiple
+        # callbacks all schedule a tick at the same time via async_create_task)
+        if self._tick_running:
+            return
+        self._tick_running = True
+        try:
+            await self._async_tick_impl(now)
+        finally:
+            self._tick_running = False
+
+    async def _async_tick_impl(self, now):
+        """Inner implementation of the heartbeat tick."""
         # now is a datetime when called by the scheduler, None for manual triggers
         scheduled = now is not None
 
@@ -705,6 +754,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if not (
             self._vacation_active
             or self._preset_mode == MODE_VACATION
+            or self._preset_mode == MODE_MANUAL
             or self._emergency_heat_active
             or not self._heating_season_active
             or self._force_return
@@ -1361,6 +1411,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 except (ValueError, TypeError):
                     pass
 
+            # Restore daily reset date so _check_daily_reset doesn't skip today's reset
+            _raw_reset_date = old.attributes.get("_last_usage_reset_date")
+            if _raw_reset_date:
+                try:
+                    from datetime import date as _date
+                    self._last_usage_reset_date = _date.fromisoformat(_raw_reset_date)
+                except (ValueError, TypeError):
+                    pass
+
             if (
                 old.state not in ("unknown", "unavailable")
                 and self._cur_temp is None
@@ -1392,7 +1451,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 t = state.attributes.get("temperature") if state else None
                 self._heater_targets[eid] = float(t) if t is not None else None
 
-        self._last_usage_reset_date = dt_util.now().date()
+        # Only set the default date if it wasn't restored from state above
+        if self._last_usage_reset_date is None:
+            self._last_usage_reset_date = dt_util.now().date()
 
         self.async_on_remove(
             async_track_time_interval(
@@ -1416,6 +1477,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._name,
                     _pid,
                 )
+
+        if not self._heaters:
+            _LOGGER.warning(
+                "%s: no heater entities configured — the climate entity will track "
+                "temperature but cannot control any heating device.",
+                self._name,
+            )
 
         self.hass.async_create_task(self._async_tick(None))
 
@@ -1535,29 +1603,42 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._heater_states[eid] = self._heater_active(s)
 
         if eid.split(".")[0] == "climate":
-            # Detect temperature change made directly on TRV or via an external app.
-            # Compare against this entity's own known target so that a second TRV
-            # reporting a different (rounded) value does not trigger a false override.
-            # Grace periods prevent false positives from:
-            #   - TRV rounding (e.g. Tado 0.5°C steps) after a Vesta command
-            #   - Stale state reports arriving right after another TRV changed
-            trv_target = s.attributes.get("temperature")
-            known_target = self._heater_targets.get(eid)
-            if trv_target is not None and known_target is not None:
-                try:
-                    trv_temp = float(trv_target)
-                    diff = abs(trv_temp - known_target)
-                    if diff > 0.1:
-                        now = time.time()
-                        in_cmd_grace = (now - self._last_heater_cmd_time) < 60
-                        in_ext_grace = (now - self._last_external_override_time) < 30
-                        if in_cmd_grace or in_ext_grace:
-                            # Accept TRV's rounded/acknowledged value for this entity only
-                            self._heater_targets[eid] = trv_temp
-                        else:
-                            self._handle_external_temp_override(trv_temp)
-                except (ValueError, TypeError):
-                    pass
+            # Skip override detection if the TRV just came back from unavailable/unknown
+            # (reconnect flood): the first state report after a reconnect is stale and
+            # does NOT represent a deliberate user override.
+            old_state = event.data.get("old_state")
+            if old_state and old_state.state in ("unavailable", "unknown"):
+                # Seed the known target from the TRV's current report instead
+                trv_target = s.attributes.get("temperature")
+                if trv_target is not None:
+                    try:
+                        self._heater_targets[eid] = float(trv_target)
+                    except (ValueError, TypeError):
+                        pass
+            else:
+                # Detect temperature change made directly on TRV or via an external app.
+                # Compare against this entity's own known target so that a second TRV
+                # reporting a different (rounded) value does not trigger a false override.
+                # Grace periods prevent false positives from:
+                #   - TRV rounding (e.g. Tado 0.5°C steps) after a Vesta command
+                #   - Stale state reports arriving right after another TRV changed
+                trv_target = s.attributes.get("temperature")
+                known_target = self._heater_targets.get(eid)
+                if trv_target is not None and known_target is not None:
+                    try:
+                        trv_temp = float(trv_target)
+                        diff = abs(trv_temp - known_target)
+                        if diff > 0.1:
+                            now = time.time()
+                            in_cmd_grace = (now - self._last_heater_cmd_time) < 60
+                            in_ext_grace = (now - self._last_external_override_time) < 30
+                            if in_cmd_grace or in_ext_grace:
+                                # Accept TRV's rounded/acknowledged value for this entity only
+                                self._heater_targets[eid] = trv_temp
+                            else:
+                                self._handle_external_temp_override(trv_temp)
+                    except (ValueError, TypeError):
+                        pass
 
         self.async_write_ha_state()
 
@@ -1599,6 +1680,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Update outdoor temperature from weather entity."""
         s = event.data.get("new_state")
         if s:
+            if s.state in ("unavailable", "unknown"):
+                self._outdoor_temp = None
+                return
             temp = s.attributes.get("temperature")
             if temp is not None:
                 try:
@@ -1606,6 +1690,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self.hass.async_create_task(self._async_tick(None))
                 except (ValueError, TypeError):
                     pass
+            else:
+                self._outdoor_temp = None
 
     @callback
     def _on_vacation_entity(self, event):
@@ -1624,7 +1710,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         if t := kwargs.get(ATTR_TEMPERATURE):
-            self._target_temp = t
+            self._target_temp = float(
+                max(self.min_temp, min(self.max_temp, float(t)))
+            )
             self._preset_mode = MODE_MANUAL
             self._force_return = False
             self._manual_start_time = time.time()

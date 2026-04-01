@@ -159,12 +159,18 @@ class ScheduleStore:
         entry = self._data.get(schedule_id)
         if not entry:
             return "off"
-        current_minutes = _time_to_minutes(time_str)
+        try:
+            current_minutes = _time_to_minutes(time_str)
+        except (ValueError, KeyError):
+            return "off"
         for block in entry.get("blocks", []):
             if weekday not in block.get("days", []):
                 continue
-            start = _time_to_minutes(block["start"])
-            end = _time_to_minutes(block["end"])
+            try:
+                start = _time_to_minutes(block["start"])
+                end = _time_to_minutes(block["end"])
+            except (ValueError, KeyError):
+                continue
             if start <= current_minutes < end:
                 return block.get("mode", "comfort")
         return "off"
@@ -175,8 +181,11 @@ class ScheduleStore:
             return "blocks must be a list"
         # Check each block structure
         for i, block in enumerate(blocks):
-            if not isinstance(block.get("days"), list):
+            days = block.get("days")
+            if not isinstance(days, list):
                 return f"block {i}: 'days' must be a list"
+            if not all(isinstance(d, int) and 0 <= d <= 6 for d in days):
+                return f"block {i}: 'days' values must be integers in range 0-6"
             if not block.get("start") or not block.get("end"):
                 return f"block {i}: 'start' and 'end' are required"
             try:

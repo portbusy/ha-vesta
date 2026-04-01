@@ -148,7 +148,8 @@ class VestaSavingsSensor(SensorEntity):
     def native_value(self):
         c = self._climate
         if self._key == "target_temperature":
-            return round(c.target_temperature, 1)
+            t = c.target_temperature
+            return round(t, 1) if t is not None else None
         if self._key == "heating_minutes_today":
             return round(c._daily_usage_seconds / 60, 1)
         if self._key == "saved_away_hours_today":

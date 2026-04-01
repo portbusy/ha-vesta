@@ -1,6 +1,7 @@
 """Config flow for Vesta climate controller."""
 from __future__ import annotations
 
+import datetime
 from typing import Any
 import voluptuous as vol
 
@@ -93,7 +94,6 @@ def _merge_annual_energy(
     user_input: dict[str, Any], current: dict[str, Any]
 ) -> dict[str, Any]:
     """Move energy_kwh_this_year into the energy_annual_data dict and remove the UI key."""
-    import datetime
     kwh = user_input.pop(CONF_ENERGY_KWH_THIS_YEAR, None)
     if kwh:
         year = str(datetime.datetime.now().year)
@@ -848,7 +848,6 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         )
 
         # --- Optional energy data for savings estimate ---
-        import datetime
         current_year = str(datetime.datetime.now().year)
         annual_data = current.get(CONF_ENERGY_ANNUAL_DATA) or {}
         current_year_kwh = annual_data.get(current_year)
