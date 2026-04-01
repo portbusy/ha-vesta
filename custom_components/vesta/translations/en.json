@@ -15,6 +15,9 @@
       }
     },
     "sensor": {
+      "target_temperature": {
+        "name": "Target Temperature"
+      },
       "heating_minutes_today": {
         "name": "Heating Minutes Today"
       },

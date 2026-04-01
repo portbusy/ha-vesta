@@ -7,7 +7,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfTime
+from homeassistant.const import UnitOfEnergy, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -15,6 +15,13 @@ from .const import DOMAIN, ATTR_SAVINGS_KWH_MONTH, ATTR_SAVINGS_EUR_MONTH
 
 # (key, name, unit, device_class, icon)
 _SENSOR_DEFS: list[tuple] = [
+    (
+        "target_temperature",
+        "Target Temperature",
+        UnitOfTemperature.CELSIUS,
+        SensorDeviceClass.TEMPERATURE,
+        "mdi:thermometer-auto",
+    ),
     (
         "heating_minutes_today",
         "Heating Minutes Today",
@@ -140,6 +147,8 @@ class VestaSavingsSensor(SensorEntity):
     @property
     def native_value(self):
         c = self._climate
+        if self._key == "target_temperature":
+            return round(c.target_temperature, 1)
         if self._key == "heating_minutes_today":
             return round(c._daily_usage_seconds / 60, 1)
         if self._key == "saved_away_hours_today":
