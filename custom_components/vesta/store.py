@@ -48,7 +48,10 @@ SCHEDULE_TEMPLATES: dict[str, dict] = {
 def _time_to_minutes(t: str) -> int:
     """Convert HH:MM to minutes since midnight."""
     h, m = t.split(":")
-    return int(h) * 60 + int(m)
+    h_int, m_int = int(h), int(m)
+    if not (0 <= h_int <= 23 and 0 <= m_int <= 59):
+        raise ValueError(f"Invalid time '{t}': hours must be 0-23 and minutes 0-59")
+    return h_int * 60 + m_int
 
 
 class ScheduleStore:

@@ -260,6 +260,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_VACATION_MODE: self._vacation_active,
             ATTR_EMERGENCY_HEAT: self._emergency_heat_active,
             ATTR_HEATING_SEASON: self._heating_season_active,
+            "pre_heating_active": self._force_return,
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
@@ -454,7 +455,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         for eid in self._heaters:
             is_active = self._heater_states.get(eid, False)
             if eid.split(".")[0] == "climate":
-                if not is_active:
+                if not is_active or target is None:
                     contributions.append(0.0)
                     continue
                 state = self.hass.states.get(eid)
@@ -752,7 +753,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if self._outdoor_temp is not None and self._outdoor_temp < 5:
             base += (5 - self._outdoor_temp) * 0.1
         avg_speed = max(self._get_global(CONF_AVG_SPEED, 50.0), 1.0)
-        h_rate = max(self._heating_rate, MIN_HEATING_RATE)
+        h_rate = max(min(self._heating_rate, MAX_HEATING_RATE), MIN_HEATING_RATE)
         travel_time_min = (self._nearest_distance / 1000) / (avg_speed / 60)
         temp_deficit = base - self._cur_temp
         if temp_deficit > 0:
@@ -1175,7 +1176,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         )
         if presence_ids:
             any_home = False
-            min_dist = 999999.0
+            min_dist: float | None = None
             for pid in presence_ids:
                 if p_state := self.hass.states.get(pid):
                     if p_state.state in ("home", STATE_ON):
@@ -1197,12 +1198,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                                 self.hass.config.latitude,
                                 self.hass.config.longitude,
                             )
-                            if dist < min_dist:
+                            if min_dist is None or dist < min_dist:
                                 min_dist = dist
                         except (TypeError, ValueError):
                             pass
 
-            self._nearest_distance = min_dist
+            # Only update when we have valid GPS data; preserve last known distance
+            # on transient GPS loss to avoid spurious pre-heating deactivations.
+            if min_dist is not None:
+                self._nearest_distance = min_dist
             ovr_mode = self._get_manual_override_mode()
 
             if any_home:
@@ -1599,6 +1603,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             if temp is not None:
                 try:
                     self._outdoor_temp = float(temp)
+                    self.hass.async_create_task(self._async_tick(None))
                 except (ValueError, TypeError):
                     pass
 
@@ -1643,13 +1648,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if self._hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
         if self._cur_temp is not None:
-            effective_target = self._compute_effective_target()
             frost_risk = self._cur_temp < ANTI_FROST_TEMP
-            target = ANTI_FROST_TEMP if frost_risk else effective_target
-            actively_heating = (frost_risk or (
-                not self._window_open and self._cur_temp < (target - 0.2)
-            ))
-            if actively_heating:
+            if frost_risk:
+                return HVACAction.HEATING
+            if (
+                self._heating_season_active
+                and not self._window_open
+                and self._cur_temp < (self._compute_effective_target() - 0.2)
+            ):
                 return HVACAction.HEATING
         return HVACAction.IDLE
 

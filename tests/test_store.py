@@ -37,6 +37,17 @@ class TestTimeToMinutes:
     def test_arbitrary_minutes(self):
         assert _time_to_minutes("10:45") == 645
 
+    def test_invalid_hours_raises(self):
+        with pytest.raises(ValueError):
+            _time_to_minutes("25:00")
+
+    def test_invalid_minutes_raises(self):
+        with pytest.raises(ValueError):
+            _time_to_minutes("10:60")
+
+    def test_boundary_max_valid(self):
+        assert _time_to_minutes("23:59") == 1439
+
 
 # ---------------------------------------------------------------------------
 # get_current_mode

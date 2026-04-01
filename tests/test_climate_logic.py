@@ -233,6 +233,65 @@ class TestEcoTemp:
         assert SmartClimatePro.eco_temp.fget(e) == pytest.approx(18.0)
 
 
+class TestHvacAction:
+    """hvac_action must not report HEATING during off-season OFF mode."""
+
+    def test_frost_risk_always_heating(self):
+        from homeassistant.components.climate import HVACAction
+        e = types.SimpleNamespace(
+            _hvac_mode=HVACMode.HEAT,
+            _cur_temp=4.0,  # below ANTI_FROST_TEMP (5.0)
+            _heating_season_active=False,
+            _window_open=False,
+        )
+        e._compute_effective_target = lambda: 21.0
+        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.HEATING
+
+    def test_off_season_no_frost_returns_idle(self):
+        from homeassistant.components.climate import HVACAction
+        e = types.SimpleNamespace(
+            _hvac_mode=HVACMode.HEAT,
+            _cur_temp=15.0,
+            _heating_season_active=False,
+            _window_open=False,
+        )
+        e._compute_effective_target = lambda: 21.0
+        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.IDLE
+
+    def test_hvac_off_returns_off(self):
+        from homeassistant.components.climate import HVACAction
+        e = types.SimpleNamespace(
+            _hvac_mode=HVACMode.OFF,
+            _cur_temp=15.0,
+            _heating_season_active=True,
+            _window_open=False,
+        )
+        e._compute_effective_target = lambda: 21.0
+        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.OFF
+
+    def test_window_open_returns_idle(self):
+        from homeassistant.components.climate import HVACAction
+        e = types.SimpleNamespace(
+            _hvac_mode=HVACMode.HEAT,
+            _cur_temp=18.0,
+            _heating_season_active=True,
+            _window_open=True,
+        )
+        e._compute_effective_target = lambda: 21.0
+        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.IDLE
+
+    def test_below_target_returns_heating(self):
+        from homeassistant.components.climate import HVACAction
+        e = types.SimpleNamespace(
+            _hvac_mode=HVACMode.HEAT,
+            _cur_temp=18.0,
+            _heating_season_active=True,
+            _window_open=False,
+        )
+        e._compute_effective_target = lambda: 21.0
+        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.HEATING
+
+
 class TestAwayTemp:
     def test_override_enabled_reads_room_config(self):
         e = _entity_with_entry({CONF_OVERRIDE_AWAY: True, CONF_AWAY_TEMP: 14.0})
