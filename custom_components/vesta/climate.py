@@ -238,6 +238,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._window_stuck_warned: bool = False        # fix 8: stuck window sensor
         self._event_listeners: list = []
         self._tick_running: bool = False
+        # True when the current manual override originated from a physical TRV
+        # interaction rather than from the Vesta UI. External overrides are
+        # immune to departure/presence logic — the user physically touched the
+        # hardware and expects that temperature to hold regardless of location.
+        self._is_external_override: bool = False
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -272,6 +277,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ATTR_EMERGENCY_HEAT: self._emergency_heat_active,
             ATTR_HEATING_SEASON: self._heating_season_active,
             "pre_heating_active": self._force_return,
+            "external_trv_override": self._is_external_override,
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
@@ -462,6 +468,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._preset_mode = MODE_MANUAL
         self._force_return = False
         self._manual_start_time = time.time()
+        self._is_external_override = True  # physical action: immune to departure logic
         self._record_schedule_state_for_override()
         _LOGGER.info(
             "External temperature override detected on %s: %.1f°C → switching to manual mode (%s)",
@@ -1332,7 +1339,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._force_return = False
                     self._schedule_state_at_override = None
             elif self._preset_mode == MODE_MANUAL:
-                if ovr_mode == MANUAL_OVERRIDE_ON_DEPARTURE and self._was_any_home:
+                if self._is_external_override:
+                    # Physical TRV override: immune to departure/presence transitions.
+                    # The user manually changed the temperature on the hardware — that
+                    # intent must be preserved regardless of location.
+                    _LOGGER.info(
+                        "Departure for %s: keeping external TRV override active (physical action).",
+                        self._name,
+                    )
+                elif ovr_mode == MANUAL_OVERRIDE_ON_DEPARTURE and self._was_any_home:
                     # on_departure: explicitly switch to away
                     _LOGGER.info(
                         "Departure for %s: manual → away (on_departure).", self._name
@@ -1751,6 +1766,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._preset_mode = MODE_MANUAL
             self._force_return = False
             self._manual_start_time = time.time()
+            self._is_external_override = False  # explicit UI action clears the flag
             self._record_schedule_state_for_override()
             await self._async_tick(None)
 
@@ -1793,6 +1809,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     async def async_set_preset_mode(self, m: str) -> None:
         self._preset_mode = m
         self._force_return = False
+        self._is_external_override = False  # explicit UI action clears the flag
         if m == MODE_MANUAL:
             self._manual_start_time = time.time()
             self._record_schedule_state_for_override()
