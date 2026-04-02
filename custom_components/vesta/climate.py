@@ -152,7 +152,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._sensor_readings: dict[str, float | None] = {
             sid: None for sid in self._sensor_ids
         }
-        self._window_sensor_id = data.get(CONF_WINDOW_SENSOR)
+        # Window sensors: support single entity (legacy string) or list
+        _raw_window = data.get(CONF_WINDOW_SENSOR)
+        if isinstance(_raw_window, list):
+            self._window_sensor_ids: list[str] = [w for w in _raw_window if w]
+        elif isinstance(_raw_window, str) and _raw_window:
+            self._window_sensor_ids = [_raw_window]
+        else:
+            self._window_sensor_ids = []
 
         # State
         self._cur_temp: float | None = None
@@ -160,8 +167,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._target_temp: float | None = None
         self._hvac_mode = HVACMode.HEAT
         self._preset_mode = MODE_SMART_SCHEDULE
+        # Per-sensor window state: {entity_id: is_ajar}
+        self._window_states: dict[str, bool] = {eid: False for eid in self._window_sensor_ids}
+        # Per-sensor timestamp when ajar started
+        self._window_ajar_since: dict[str, float | None] = {eid: None for eid in self._window_sensor_ids}
         self._window_ajar = False
-        self._window_ajar_since: float | None = None
         self._window_open = False
         self._vacation_active = False
         self._emergency_heat_active = False
@@ -610,24 +620,35 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return
 
         # 3. Window delay: compute effective window_open from raw ajar state
-        if self._window_ajar:
+        # Any sensor ajar triggers the delay countdown; window is "open" once
+        # the first sensor passes the delay threshold.
+        any_ajar = any(self._window_states.values())
+        self._window_ajar = any_ajar
+        if any_ajar:
             delay_min = float(self._entry.data.get(CONF_WINDOW_DELAY, 0))
-            if delay_min <= 0:
-                self._window_open = True
-            elif self._window_ajar_since is not None:
-                elapsed_min = (time.time() - self._window_ajar_since) / 60
-                self._window_open = elapsed_min >= delay_min
-            # Warn if window has been open suspiciously long (possible stuck sensor)
-            if self._window_ajar_since is not None:
-                hours_open = (time.time() - self._window_ajar_since) / 3600
+            now_ts = time.time()
+            window_open = False
+            for eid, is_ajar in self._window_states.items():
+                if not is_ajar:
+                    continue
+                since = self._window_ajar_since.get(eid)
+                if since is None:
+                    continue
+                elapsed_min = (now_ts - since) / 60
+                if delay_min <= 0 or elapsed_min >= delay_min:
+                    window_open = True
+                # Warn if this sensor has been open suspiciously long
+                hours_open = (now_ts - since) / 3600
                 if hours_open > 2 and not self._window_stuck_warned:
                     _LOGGER.warning(
-                        "%s: window sensor has been reporting open for %.0f hours. "
+                        "%s: window sensor %s has been reporting open for %.0f hours. "
                         "Check whether the sensor is stuck.",
                         self._name,
+                        eid,
                         hours_open,
                     )
                     self._window_stuck_warned = True
+            self._window_open = window_open
         else:
             self._window_open = False
 
@@ -1440,6 +1461,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         pass
         self._cur_temp = self._compute_cur_temp()
 
+        # Seed window sensor states from current HA state
+        for eid in self._window_sensor_ids:
+            ws = self.hass.states.get(eid)
+            if ws and ws.state == STATE_ON:
+                self._window_states[eid] = True
+                self._window_ajar_since[eid] = time.time()
+            else:
+                self._window_states[eid] = False
+                self._window_ajar_since[eid] = None
+
         # Initialise per-entity heater state from reality to avoid spurious
         # commands at startup and correctly handle rooms with multiple heaters.
         self._heater_states = {}
@@ -1511,10 +1542,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 )
             )
 
-        if self._window_sensor_id:
+        if self._window_sensor_ids:
             self._event_listeners.append(
                 async_track_state_change_event(
-                    self.hass, [self._window_sensor_id], self._on_window
+                    self.hass, self._window_sensor_ids, self._on_window
                 )
             )
 
@@ -1661,19 +1692,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         s = event.data.get("new_state")
         if not s:
             return
+        eid = s.entity_id
+        if eid not in self._window_states:
+            return
         is_open = s.state == STATE_ON
         if is_open:
-            if not self._window_ajar:
-                self._window_ajar = True
-                self._window_ajar_since = time.time()
-            # Trigger a tick so state is written; delay logic runs inside _async_tick
-            self.hass.async_create_task(self._async_tick(None))
+            if not self._window_states.get(eid):
+                self._window_states[eid] = True
+                self._window_ajar_since[eid] = time.time()
         else:
-            self._window_ajar = False
-            self._window_ajar_since = None
-            self._window_open = False
-            self._window_stuck_warned = False
-            self.hass.async_create_task(self._async_tick(None))
+            self._window_states[eid] = False
+            self._window_ajar_since[eid] = None
+            # If no sensors remain open, clear derived open state immediately
+            if not any(self._window_states.values()):
+                self._window_open = False
+                self._window_ajar = False
+                self._window_stuck_warned = False
+        self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_weather(self, event):

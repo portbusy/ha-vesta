@@ -615,21 +615,15 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 )
 
-            # Window sensor: area-filtered, optional
-            win_default = d.get(CONF_WINDOW_SENSOR)
-            win_key = (
-                vol.Optional(CONF_WINDOW_SENSOR, default=win_default)
-                if win_default
-                else vol.Optional(CONF_WINDOW_SENSOR)
-            )
+            # Window sensors: area-filtered, optional, multiple
             if window_ids:
-                schema[win_key] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(include_entities=window_ids)
+                schema[vol.Optional(CONF_WINDOW_SENSOR, default=[])] = selector.EntitySelector(
+                    selector.EntitySelectorConfig(include_entities=window_ids, multiple=True)
                 )
             else:
-                schema[win_key] = selector.EntitySelector(
+                schema[vol.Optional(CONF_WINDOW_SENSOR, default=[])] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="binary_sensor", device_class="window"
+                        domain="binary_sensor", device_class="window", multiple=True
                     )
                 )
         else:
@@ -647,10 +641,10 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     domain="sensor", device_class="temperature", multiple=True
                 )
             )
-            schema[vol.Optional(CONF_WINDOW_SENSOR)] = (
+            schema[vol.Optional(CONF_WINDOW_SENSOR, default=[])] = (
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="binary_sensor", device_class="window"
+                        domain="binary_sensor", device_class="window", multiple=True
                     )
                 )
             )
@@ -925,12 +919,12 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             temp_ids = list(
                 dict.fromkeys(d.get("temp_ids", []) + saved_sensor)
             )
-            saved_window = current.get(CONF_WINDOW_SENSOR)
-            window_ids = list(
-                dict.fromkeys(
-                    d.get("window_ids", []) + ([saved_window] if saved_window else [])
-                )
+            raw_saved_window = current.get(CONF_WINDOW_SENSOR)
+            saved_window: list[str] = (
+                raw_saved_window if isinstance(raw_saved_window, list)
+                else ([raw_saved_window] if isinstance(raw_saved_window, str) and raw_saved_window else [])
             )
+            window_ids = list(dict.fromkeys(d.get("window_ids", []) + saved_window))
 
             if heater_ids:
                 schema_dict[
@@ -975,22 +969,16 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
 
             if window_ids:
                 schema_dict[
-                    vol.Optional(
-                        CONF_WINDOW_SENSOR,
-                        **({"default": saved_window} if saved_window else {}),
-                    )
+                    vol.Optional(CONF_WINDOW_SENSOR, default=saved_window)
                 ] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(include_entities=window_ids)
+                    selector.EntitySelectorConfig(include_entities=window_ids, multiple=True)
                 )
             else:
                 schema_dict[
-                    vol.Optional(
-                        CONF_WINDOW_SENSOR,
-                        **({"default": saved_window} if saved_window else {}),
-                    )
+                    vol.Optional(CONF_WINDOW_SENSOR, default=saved_window)
                 ] = selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="binary_sensor", device_class="window"
+                        domain="binary_sensor", device_class="window", multiple=True
                     )
                 )
         else:
@@ -1017,21 +1005,18 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     domain="sensor", device_class="temperature", multiple=True
                 )
             )
-            window = current.get(CONF_WINDOW_SENSOR)
-            if window:
-                schema_dict[
-                    vol.Optional(CONF_WINDOW_SENSOR, default=window)
-                ] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="binary_sensor", device_class="window"
-                    )
+            raw_win = current.get(CONF_WINDOW_SENSOR)
+            win_default: list[str] = (
+                raw_win if isinstance(raw_win, list)
+                else ([raw_win] if isinstance(raw_win, str) and raw_win else [])
+            )
+            schema_dict[
+                vol.Optional(CONF_WINDOW_SENSOR, default=win_default)
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor", device_class="window", multiple=True
                 )
-            else:
-                schema_dict[vol.Optional(CONF_WINDOW_SENSOR)] = selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="binary_sensor", device_class="window"
-                    )
-                )
+            )
 
         schema_dict[
             vol.Optional(
