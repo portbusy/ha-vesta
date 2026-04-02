@@ -3,10 +3,15 @@ header = ""
 body = """
 {% for group, commits in commits | group_by(attribute="group") %}\
 ### {{ group }}
+
 {% for commit in commits %}\
-- {{ commit.message | upper_first }} \
+- **{{ commit.message | upper_first }}** \
 ([`{{ commit.id | truncate(length=7, end="") }}`]\
 (https://github.com/portbusy/ha-vesta/commit/{{ commit.id }}))
+{% if commit.body %}\
+{{ commit.body | trim | indent(prefix="  ") }}
+
+{% endif %}\
 {% endfor %}
 {% endfor %}\
 """
