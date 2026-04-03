@@ -1356,8 +1356,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._preset_mode = MODE_AWAY
                     self._force_return = False
                     self._schedule_state_at_override = None
-                elif ovr_mode != MANUAL_OVERRIDE_PERMANENT:
-                    # All non-permanent modes: pause override, use away temp while empty
+                elif ovr_mode != MANUAL_OVERRIDE_PERMANENT and self._was_any_home:
+                    # Non-permanent departure: pause override, use away temp while empty.
+                    # Guard on _was_any_home so this only fires on an actual departure
+                    # (home → away transition). If the user was already away and set a
+                    # manual override remotely, preserve it instead of instantly resetting.
                     _LOGGER.info(
                         "Departure for %s: pausing manual override (%s), away temp active.",
                         self._name,
@@ -1366,7 +1369,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._manual_paused_for_away = True
                     self._preset_mode = MODE_AWAY
                     self._force_return = False
-                # permanent: stay in manual regardless
+                # permanent or already-away manual override: stay in manual regardless
             elif self._preset_mode not in (MODE_VACATION,):
                 self._preset_mode = MODE_AWAY
                 self._force_return = False
@@ -1679,7 +1682,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                             now = time.time()
                             in_cmd_grace = (now - self._last_heater_cmd_time) < 60
                             in_ext_grace = (now - self._last_external_override_time) < 30
-                            if in_cmd_grace or in_ext_grace:
+                            # in_ext_grace covers multi-TRV debounce: a second TRV in
+                            # the same room may report a different (possibly large) value
+                            # right after an external override — always absorb those.
+                            # in_cmd_grace covers TRV acknowledgment rounding (e.g. Tado
+                            # 0.5 °C steps) — absorb only when diff is small (≤ 1.5 °C).
+                            # A large diff during cmd grace is deliberate user intent and
+                            # must still trigger the override (prevents the reset loop
+                            # where Vesta re-sends away/schedule temp every tick).
+                            if in_ext_grace or (in_cmd_grace and diff <= 1.5):
                                 # Accept TRV's rounded/acknowledged value for this entity only
                                 self._heater_targets[eid] = trv_temp
                             else:
