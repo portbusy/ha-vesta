@@ -466,6 +466,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             if eid.split(".")[0] == "climate":
                 self._heater_targets[eid] = temp
         self._preset_mode = MODE_MANUAL
+        self._hvac_mode = HVACMode.HEAT  # physical action always implies intent to heat
         self._force_return = False
         self._manual_start_time = time.time()
         self._is_external_override = True  # physical action: immune to departure logic
@@ -1764,6 +1765,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 max(self.min_temp, min(self.max_temp, float(t)))
             )
             self._preset_mode = MODE_MANUAL
+            self._hvac_mode = HVACMode.HEAT  # setting a temperature always implies intent to heat
             self._force_return = False
             self._manual_start_time = time.time()
             self._is_external_override = False  # explicit UI action clears the flag
@@ -1811,6 +1813,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._force_return = False
         self._is_external_override = False  # explicit UI action clears the flag
         if m == MODE_MANUAL:
+            self._hvac_mode = HVACMode.HEAT  # switching to manual implies intent to heat
             self._manual_start_time = time.time()
             self._record_schedule_state_for_override()
         else:
