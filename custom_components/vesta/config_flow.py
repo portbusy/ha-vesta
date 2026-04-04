@@ -95,7 +95,7 @@ def _merge_annual_energy(
 ) -> dict[str, Any]:
     """Move energy_kwh_this_year into the energy_annual_data dict and remove the UI key."""
     kwh = user_input.pop(CONF_ENERGY_KWH_THIS_YEAR, None)
-    if kwh:
+    if kwh is not None:
         year = str(datetime.datetime.now().year)
         annual = dict(current.get(CONF_ENERGY_ANNUAL_DATA) or {})
         annual[year] = float(kwh)
@@ -147,11 +147,11 @@ def _validate_overrides(user_input: dict[str, Any], errors: dict[str, str]) -> N
     if overrides.get(CONF_OVERRIDE_PRESENCE) and not overrides.get(
         CONF_PRESENCE_SENSORS
     ):
-        errors[CONF_PRESENCE_SENSORS] = "missing_presence_sensors"
+        errors[f"overrides.{CONF_PRESENCE_SENSORS}"] = "missing_presence_sensors"
     if overrides.get(CONF_OVERRIDE_SCHEDULE) and not overrides.get(CONF_SCHEDULE):
-        errors[CONF_SCHEDULE] = "missing_schedule_entity"
+        errors[f"overrides.{CONF_SCHEDULE}"] = "missing_schedule_entity"
     if overrides.get(CONF_OVERRIDE_WEATHER) and not overrides.get(CONF_WEATHER):
-        errors[CONF_WEATHER] = "missing_weather_entity"
+        errors[f"overrides.{CONF_WEATHER}"] = "missing_weather_entity"
 
 
 def _overrides_schema(

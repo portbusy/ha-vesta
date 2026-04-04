@@ -119,7 +119,7 @@ Each block in a Schedule helper can carry data in the "Additional data" field (v
 |--------|-----------|
 | **Smart Schedule** | Follows the schedule. Temperature adjusts with presence, weather, and pre-heating. |
 | **Manual** | Holds the temperature you set. Reverts to Smart Schedule according to the configured revert mode. |
-| **Away** | Holds at the away temperature. Pre-heating starts automatically when you're heading home. |
+| **Away** | Holds at the away temperature. Pre-heating starts automatically when you're heading home. Can be set manually even while at home (presence detection will not override a manually-selected Away preset). |
 | **Vacation** | Holds at 5°C (anti-frost). Presence detection does not override this mode. |
 
 ---
@@ -138,7 +138,9 @@ When you set a temperature manually (from the UI, a TRV dial, or an external app
 | **Permanent** | Holds until you change it manually again. |
 | **Timer or schedule** | Reverts at whichever comes first — timer expiry or next schedule change. |
 
-Vesta also detects temperature changes made directly on the TRV or via an external app (e.g. Tado). Any change that differs from Vesta's last setpoint by more than 0.1°C is treated as a manual override and triggers the same revert behaviour as a UI change.
+Vesta also detects temperature changes made directly on the TRV or via an external app (e.g. Tado). Any change that differs from Vesta's last setpoint by more than 0.1°C is treated as a manual override and triggers the same revert behaviour as a UI change. Turning a TRV on physically from the off state (without changing the setpoint) is also detected as a manual override.
+
+Timer-based overrides that were paused when you left home survive HA restarts — when you return the remaining timer is correctly restored.
 
 ---
 

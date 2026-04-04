@@ -172,7 +172,7 @@ class ScheduleStore:
             except (ValueError, KeyError):
                 continue
             if start <= current_minutes < end:
-                return block.get("mode", "comfort")
+                return str(block.get("mode", "comfort")).lower().strip()
         return "off"
 
     def validate_blocks(self, blocks: list) -> str | None:

@@ -106,7 +106,7 @@ async def async_setup_entry(
         return
 
     sensors = [
-        VestaSavingsSensor(climate, key, name, unit, dc, icon)
+        VestaSavingsSensor(hass, entry.entry_id, climate, key, name, unit, dc, icon)
         for key, name, unit, dc, icon in _SENSOR_DEFS
     ]
     climate._companion_sensors = sensors
@@ -122,6 +122,8 @@ class VestaSavingsSensor(SensorEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
+        entry_id: str,
         climate,
         key: str,
         name: str,
@@ -129,6 +131,8 @@ class VestaSavingsSensor(SensorEntity):
         device_class: str | None,
         icon: str,
     ) -> None:
+        self._hass = hass
+        self._entry_id = entry_id  # stored independently so unique_id survives climate reload
         self._climate = climate
         self._key = key
         self._attr_translation_key = key
@@ -138,15 +142,26 @@ class VestaSavingsSensor(SensorEntity):
 
     @property
     def unique_id(self) -> str:
-        return f"{DOMAIN}_{self._climate._entry.entry_id}_{self._key}"
+        return f"{DOMAIN}_{self._entry_id}_{self._key}"
 
     @property
     def device_info(self):
         return self._climate.device_info
 
+    def _get_climate(self):
+        """Return the current climate entity, re-looking it up if the reference is stale."""
+        current = self._hass.data.get(DOMAIN, {}).get("climate_entities_by_entry", {}).get(
+            self._entry_id
+        )
+        if current is not None and current is not self._climate:
+            self._climate = current
+        return self._climate
+
     @property
     def native_value(self):
-        c = self._climate
+        c = self._get_climate()
+        if c is None:
+            return None
         if self._key == "target_temperature":
             t = c.target_temperature
             return round(t, 1) if t is not None else None
