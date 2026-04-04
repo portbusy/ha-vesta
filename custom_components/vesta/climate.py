@@ -283,6 +283,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "pre_heating_active": self._force_return,
             "external_trv_override": self._is_external_override,
             "_is_external_override": self._is_external_override,
+            "_away_set_by_presence": self._away_set_by_presence,
             ATTR_OUTDOOR_TEMP: self._outdoor_temp,
             "hardware_failure_warning": self._hardware_failure,
             "manual_timeout_remaining_min": self._get_manual_timeout(),
@@ -1460,6 +1461,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             )
             self._is_external_override = bool(
                 old.attributes.get("_is_external_override", False)
+            )
+            # Default to True when restoring MODE_AWAY without the saved attribute
+            # (backward compat: old installs didn't persist this flag).
+            self._away_set_by_presence = bool(
+                old.attributes.get(
+                    "_away_set_by_presence",
+                    old.attributes.get("preset_mode") == MODE_AWAY,
+                )
             )
 
             if old.state in (HVACMode.HEAT, HVACMode.OFF):
