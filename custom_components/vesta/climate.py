@@ -322,6 +322,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "_monthly_hdh_eco": self._monthly_hdh_eco,
             "_monthly_hdh_base": self._monthly_hdh_base,
             "_last_savings_reset_month": self._last_savings_reset_month,
+            "_was_any_home": self._was_any_home,
+            "_window_ajar_since": self._window_ajar_since,
         }
         attrs.update(self._compute_savings_est())
         attrs["active_control_reason"] = self._active_control_reason()
@@ -693,13 +695,26 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             target = self.max_temp
             climate_active = True
             switch_on = True
-        elif not self._heating_season_active and not frost_risk:
+        elif (
+            not self._heating_season_active
+            and not frost_risk
+            and self._preset_mode != MODE_MANUAL
+        ):
             # Off-season: no frost risk — behaviour depends on configured off-mode.
+            # Priority: emergency (above) > off-season > normal.
+            # MODE_MANUAL is excluded so an explicit user temperature setting always
+            # takes effect even during off-season.
+            # Vacation does NOT exclude off-season: in summer the boiler switch is off
+            # regardless, so OPEN mode is safe. When vacation is active we lower the
+            # TRV setpoint to ANTI_FROST_TEMP so electric-only setups don't heat.
             # Frost protection still takes priority (handled by the else branch below).
             offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
+            in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
             if offmode == SEASON_OFFMODE_OPEN:
-                # Keep TRV valves exercised at max setpoint; switches stay off
-                target = self.max_temp
+                # Keep TRV valves exercised; switches stay off so the boiler never fires.
+                # If vacation is active, use a safe low setpoint instead of max_temp to
+                # prevent unintended heating on electric-only heater setups.
+                target = ANTI_FROST_TEMP if in_vacation else self.max_temp
                 climate_active = True
                 switch_on = False
             elif offmode == SEASON_OFFMODE_FROST:
@@ -1077,8 +1092,28 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return 35.0
 
     @property
-    def target_temperature(self) -> float:
-        """Return the target temperature (pure read-only, no side-effects)."""
+    def target_temperature(self) -> float | None:
+        """Return the target temperature shown in the UI.
+
+        During off-season (without vacation/emergency) this reflects the actual
+        control target — not the schedule temperature — so the UI is consistent
+        with what the heaters are actually being commanded to do.
+        """
+        if self._emergency_heat_active:
+            return self.max_temp
+        if (
+            not self._heating_season_active
+            and self._preset_mode != MODE_MANUAL
+        ):
+            offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
+            in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
+            if offmode == SEASON_OFFMODE_OPEN:
+                # Vacation lowers the setpoint to ANTI_FROST_TEMP (safety for electric heaters)
+                return ANTI_FROST_TEMP if in_vacation else self.max_temp
+            if offmode == SEASON_OFFMODE_FROST:
+                return SEASON_OFF_FROST_TEMP
+            # SEASON_OFFMODE_OFF: no target
+            return None
         return self._compute_effective_target()
 
     # HA Schedule entity built-in attributes — not part of block additional data
@@ -1319,7 +1354,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
             if any_home:
                 if self._manual_paused_for_away:
-                    # Returning home while manual override was paused for away
+                    # Returning home while manual override was paused for away.
+                    # Compute the timeout BEFORE clearing _manual_paused_for_away:
+                    # _get_manual_timeout relies on the flag being True to know it should
+                    # check a paused timer. Clearing it first would always return 0.
+                    paused_timeout = self._get_manual_timeout()
                     self._manual_paused_for_away = False
                     if ovr_mode == MANUAL_OVERRIDE_ON_ARRIVAL:
                         _LOGGER.info(
@@ -1330,11 +1369,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         self._force_return = False
                         self._schedule_state_at_override = None
                     elif ovr_mode in (MANUAL_OVERRIDE_TIMER, MANUAL_OVERRIDE_TIMER_OR_SCHEDULE):
-                        if self._get_manual_timeout() > 0:
+                        if paused_timeout > 0:
                             _LOGGER.info(
                                 "Arrival for %s: resuming paused override (timer, %d min left).",
                                 self._name,
-                                self._get_manual_timeout(),
+                                paused_timeout,
                             )
                             self._preset_mode = MODE_MANUAL
                         else:
@@ -1361,8 +1400,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._preset_mode == MODE_MANUAL
                     and ovr_mode == MANUAL_OVERRIDE_ON_ARRIVAL
                     and not self._was_any_home
+                    and not self._is_external_override
                 ):
-                    # Direct arrival while in manual mode (not paused): revert
+                    # Direct arrival while in manual mode (not paused): revert.
+                    # External TRV overrides are immune — the user physically touched
+                    # the hardware and expects that temperature to hold regardless of location.
                     _LOGGER.info(
                         "Arrival for %s: reverting manual override (on_arrival).", self._name
                     )
@@ -1437,7 +1479,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._cooling_rate = old.attributes.get(
                 ATTR_COOLING_RATE, self._cooling_rate
             )
-            self._daily_usage_seconds = (
+            self._daily_usage_seconds = int(
                 old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
             )
             self._monthly_actual_heating_s = int(
@@ -1450,9 +1492,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._monthly_hdh_window = float(old.attributes.get("_monthly_hdh_window", 0.0))
             self._monthly_hdh_eco = float(old.attributes.get("_monthly_hdh_eco", 0.0))
             self._monthly_hdh_base = float(old.attributes.get("_monthly_hdh_base", 0.0))
-            self._last_savings_reset_month = old.attributes.get(
-                "_last_savings_reset_month"
-            )
+            _raw_month = old.attributes.get("_last_savings_reset_month")
+            self._last_savings_reset_month = int(_raw_month) if _raw_month is not None else None
             self._schedule_state_at_override = old.attributes.get(
                 "_schedule_state_at_override"
             )
@@ -1469,6 +1510,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     "_away_set_by_presence",
                     old.attributes.get("preset_mode") == MODE_AWAY,
                 )
+            )
+            self._was_any_home = bool(
+                old.attributes.get("_was_any_home", False)
             )
 
             if old.state in (HVACMode.HEAT, HVACMode.OFF):
@@ -1524,12 +1568,21 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         pass
         self._cur_temp = self._compute_cur_temp()
 
-        # Seed window sensor states from current HA state
+        # Seed window sensor states from current HA state.
+        # Restore saved open-since timestamps so the window delay countdown
+        # survives a restart (otherwise a briefly-open window would reset the
+        # delay and potentially allow a heating pulse with the window open).
+        _saved_ajar_since = (
+            old.attributes.get("_window_ajar_since", {}) if old else {}
+        )
         for eid in self._window_sensor_ids:
             ws = self.hass.states.get(eid)
             if ws and ws.state == STATE_ON:
                 self._window_states[eid] = True
-                self._window_ajar_since[eid] = time.time()
+                saved_ts = _saved_ajar_since.get(eid)
+                self._window_ajar_since[eid] = (
+                    float(saved_ts) if saved_ts is not None else time.time()
+                )
             else:
                 self._window_states[eid] = False
                 self._window_ajar_since[eid] = None
@@ -1702,13 +1755,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             # does NOT represent a deliberate user override.
             old_state = event.data.get("old_state")
             if old_state and old_state.state in ("unavailable", "unknown"):
-                # Seed the known target from the TRV's current report instead
+                # Seed the known target from the TRV's current report instead.
+                # If the TRV reports no temperature yet, clear the stale entry so
+                # the next real state report is not misread as an external override.
                 trv_target = s.attributes.get("temperature")
                 if trv_target is not None:
                     try:
                         self._heater_targets[eid] = float(trv_target)
                     except (ValueError, TypeError):
-                        pass
+                        self._heater_targets[eid] = None
+                else:
+                    self._heater_targets[eid] = None
             else:
                 # Detect temperature change made directly on TRV or via an external app.
                 # Compare against this entity's own known target so that a second TRV
@@ -1841,6 +1898,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._force_return = False
             self._manual_start_time = time.time()
             self._is_external_override = False  # explicit UI action clears the flag
+            # Clear away-pause flags: user explicitly set a temp, so the manual
+            # override is no longer paused and should not be treated as away.
+            self._manual_paused_for_away = False
+            self._away_set_by_presence = False
             self._record_schedule_state_for_override()
             await self._async_tick(None)
 
@@ -1862,11 +1923,32 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return HVACAction.OFF
         if self._cur_temp is not None:
             frost_risk = self._cur_temp < ANTI_FROST_TEMP
-            if frost_risk:
+            # Frost protection and emergency heat are unconditional
+            if frost_risk or self._emergency_heat_active:
                 return HVACAction.HEATING
+            # Off-season (manual mode falls through to normal logic)
             if (
-                self._heating_season_active
-                and not self._window_open
+                not self._heating_season_active
+                and self._preset_mode != MODE_MANUAL
+            ):
+                offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
+                in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
+                # FROST off-season mode actively heats to 7°C: report correctly.
+                # In vacation+OPEN mode the TRV is at ANTI_FROST_TEMP (5°C), not max_temp,
+                # so use the frost_risk threshold already handled above.
+                if offmode == SEASON_OFFMODE_FROST:
+                    frost_threshold = SEASON_OFF_FROST_TEMP + 0.8
+                elif in_vacation:
+                    # OPEN+vacation: TRV at 5°C — frost_risk already covers < 5°C
+                    frost_threshold = None
+                else:
+                    frost_threshold = None
+                if frost_threshold is not None and self._cur_temp < frost_threshold:
+                    return HVACAction.HEATING
+                return HVACAction.IDLE
+            # Normal in-season heating
+            if (
+                not self._window_open
                 and self._cur_temp < (self._compute_effective_target() - 0.2)
             ):
                 return HVACAction.HEATING
