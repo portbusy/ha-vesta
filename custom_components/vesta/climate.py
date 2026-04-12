@@ -698,12 +698,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         elif (
             not self._heating_season_active
             and not frost_risk
-            and self._preset_mode != MODE_MANUAL
         ):
             # Off-season: no frost risk — behaviour depends on configured off-mode.
-            # Priority: emergency (above) > off-season > normal.
-            # MODE_MANUAL is excluded so an explicit user temperature setting always
-            # takes effect even during off-season.
+            # Priority: emergency (above) > off-season > frost guard (else branch).
+            # The heating season switch is a master kill switch: it wins over manual
+            # overrides, schedules, and presence. If the user wants heating during
+            # off-season they must use the emergency heat switch.
             # Vacation does NOT exclude off-season: in summer the boiler switch is off
             # regardless, so OPEN mode is safe. When vacation is active we lower the
             # TRV setpoint to ANTI_FROST_TEMP so electric-only setups don't heat.
@@ -1038,6 +1038,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._heater_states[eid] = climate_active
                     if not climate_active:
                         self._heater_targets[eid] = None
+                    any_climate_cmd = True  # grace period covers hvac_mode commands too
                     await self.hass.services.async_call(
                         "climate",
                         "set_hvac_mode",
@@ -1106,7 +1107,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """
         if self._emergency_heat_active:
             return True
-        if not self._heating_season_active and self._preset_mode != MODE_MANUAL:
+        if not self._heating_season_active:
             offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
             if offmode == SEASON_OFFMODE_FROST:
                 return (
@@ -1126,10 +1127,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """
         if self._emergency_heat_active:
             return self.max_temp
-        if (
-            not self._heating_season_active
-            and self._preset_mode != MODE_MANUAL
-        ):
+        if not self._heating_season_active:
             offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
             in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
             if offmode == SEASON_OFFMODE_OPEN:
@@ -1772,6 +1770,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if not s:
             return
         eid = s.entity_id
+        prev_active = self._heater_states.get(eid)
         self._heater_states[eid] = self._heater_active(s)
 
         if eid.split(".")[0] == "climate":
@@ -1840,6 +1839,16 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                             pass
 
         self.async_write_ha_state()
+
+        # A heater unexpectedly turned on while Vesta expects everything off
+        # (off-season or hvac_mode=OFF). Fight back immediately instead of
+        # waiting for the next scheduled tick (up to 60 s away).
+        if (
+            not prev_active
+            and self._heater_states[eid]
+            and (not self._heating_season_active or self._hvac_mode == HVACMode.OFF)
+        ):
+            self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_sensor(self, event):
@@ -1951,11 +1960,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             # Frost protection and emergency heat are unconditional
             if frost_risk or self._emergency_heat_active:
                 return HVACAction.HEATING
-            # Off-season (manual mode falls through to normal logic)
-            if (
-                not self._heating_season_active
-                and self._preset_mode != MODE_MANUAL
-            ):
+            # Off-season: master kill switch wins over manual mode too
+            if not self._heating_season_active:
                 offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
                 in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
                 # FROST off-season mode actively heats to 7°C: report correctly.
