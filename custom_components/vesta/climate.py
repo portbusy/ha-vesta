@@ -1104,6 +1104,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         Differs from _heater_states in off-season: OPEN mode keeps TRV valves
         exercised (climate_active=True) but does NOT require boiler heat.
         FROST mode actively heats to 7°C — the boiler is needed.
+
+        For TRV-only rooms: climate_active is True whenever HVAC=HEAT regardless
+        of whether the room is below its setpoint (TRVs manage their own valve
+        internally). Apply bang-bang logic here — same threshold as switch_on —
+        so the boiler shuts off when all rooms are satisfied and turns back on only
+        when a room drops below its effective target again.
+
+        For switch-based or mixed rooms: _heater_states[switch_eid] already uses
+        bang-bang (switch_on), so any active switch is a real heat request.
         """
         if self._emergency_heat_active:
             return True
@@ -1115,7 +1124,29 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     and self._cur_temp < (SEASON_OFF_FROST_TEMP + 0.8)
                 )
             return False  # OPEN = valve exercise only; OFF = nothing
-        return any(self._heater_states.values())
+        # Switch-based heaters: _heater_states tracks bang-bang (switch_on).
+        # Any active switch is a real heat request — boiler must fire.
+        has_switches = any(eid.split(".")[0] != "climate" for eid in self._heaters)
+        if has_switches:
+            return any(
+                self._heater_states.get(eid, False)
+                for eid in self._heaters
+                if eid.split(".")[0] != "climate"
+            )
+        # TRV-only: derive demand from temperature delta (bang-bang, same as
+        # switch_on) so the boiler turns off when all rooms are at setpoint.
+        frost_risk = (
+            self._cur_temp is not None and self._cur_temp < (ANTI_FROST_TEMP + 0.8)
+        )
+        if self._hvac_mode != HVACMode.HEAT or self._window_open:
+            # HVAC=OFF or window open: only frost guard can demand heat.
+            return frost_risk
+        if frost_risk:
+            return True
+        effective = self._compute_effective_target()
+        if effective is None or self._cur_temp is None:
+            return False
+        return self._cur_temp < (effective - 0.2)
 
     @property
     def target_temperature(self) -> float | None:
