@@ -47,9 +47,7 @@ class BoilerCoordinator:
         any_heating = False
 
         for room in rooms:
-            # Use the per-entity state dict that climate.py maintains
-            heater_states = getattr(room, "_heater_states", {})
-            if any(heater_states.values()):
+            if getattr(room, "boiler_demand", False):
                 any_heating = True
                 target = getattr(room, "_target_temp", None)
                 if target is None:

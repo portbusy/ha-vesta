@@ -238,7 +238,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._hardware_failure = False
         self._stuck_check_time: float | None = None
         self._stuck_check_temp: float | None = None
-        self._window_stuck_warned: bool = False        # fix 8: stuck window sensor
+        self._window_stuck_warned: dict[str, bool] = {}  # per-sensor stuck warning flag
         self._event_listeners: list = []
         self._tick_running: bool = False
         self._tick_pending: bool = False  # re-run tick immediately after current one completes
@@ -500,10 +500,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         estimated valve openness for TRV entities.
         """
         self._duty_history.append(power)
-        if self._duty_history:
-            self._heating_power = (
-                sum(self._duty_history) / len(self._duty_history)
-            ) * 100.0
+        self._heating_power = (
+            sum(self._duty_history) / len(self._duty_history)
+        ) * 100.0
 
     def _estimate_heater_power(
         self, switch_on: bool, climate_active: bool, target: float
@@ -564,11 +563,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         values = [v for v in self._sensor_readings.values() if v is not None]
         if values:
             return sum(values) / len(values)
-        # Fallback: read current_temperature attribute from any available climate heater
+        # Fallback: read current_temperature attribute from any available climate heater.
+        # Skip unavailable/unknown states — HA retains stale attributes on offline entities.
         for eid in self._heaters:
             if eid.split(".")[0] == "climate":
                 state = self.hass.states.get(eid)
-                if state:
+                if state and state.state not in ("unavailable", "unknown"):
                     temp = state.attributes.get("current_temperature")
                     if temp is not None:
                         try:
@@ -669,7 +669,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     window_open = True
                 # Warn if this sensor has been open suspiciously long
                 hours_open = (now_ts - since) / 3600
-                if hours_open > 2 and not self._window_stuck_warned:
+                if hours_open > 2 and not self._window_stuck_warned.get(eid, False):
                     _LOGGER.warning(
                         "%s: window sensor %s has been reporting open for %.0f hours. "
                         "Check whether the sensor is stuck.",
@@ -677,7 +677,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         eid,
                         hours_open,
                     )
-                    self._window_stuck_warned = True
+                    self._window_stuck_warned[eid] = True
             self._window_open = window_open
         else:
             self._window_open = False
@@ -745,9 +745,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
                 switch_on = self._cur_temp < (effective_target - 0.2)
 
-        # Count usage on scheduled ticks (use switch_on as the "actively heating" proxy)
+        # Count usage on scheduled ticks.
+        # For TRV-only setups switch_on is always False once the room reaches
+        # temperature (bang-bang logic stops at target-0.2°C), so use
+        # climate_active as the proxy instead to avoid systematic undercounting.
+        has_switches = any(eid.split(".")[0] != "climate" for eid in self._heaters)
+        usage_active = switch_on if has_switches else climate_active
         if scheduled:
-            if switch_on:
+            if usage_active:
                 self._daily_usage_seconds += 60
                 self._monthly_actual_heating_s += 60
 
@@ -1090,6 +1095,26 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     @property
     def max_temp(self) -> float:
         return 35.0
+
+    @property
+    def boiler_demand(self) -> bool:
+        """Return True when this room is actually requesting heat from the boiler.
+
+        Differs from _heater_states in off-season: OPEN mode keeps TRV valves
+        exercised (climate_active=True) but does NOT require boiler heat.
+        FROST mode actively heats to 7°C — the boiler is needed.
+        """
+        if self._emergency_heat_active:
+            return True
+        if not self._heating_season_active and self._preset_mode != MODE_MANUAL:
+            offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
+            if offmode == SEASON_OFFMODE_FROST:
+                return (
+                    self._cur_temp is not None
+                    and self._cur_temp < (SEASON_OFF_FROST_TEMP + 0.8)
+                )
+            return False  # OPEN = valve exercise only; OFF = nothing
+        return any(self._heater_states.values())
 
     @property
     def target_temperature(self) -> float | None:
@@ -1847,10 +1872,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._window_states[eid] = False
             self._window_ajar_since[eid] = None
             # If no sensors remain open, clear derived open state immediately
+            self._window_stuck_warned.pop(eid, None)
             if not any(self._window_states.values()):
                 self._window_open = False
                 self._window_ajar = False
-                self._window_stuck_warned = False
         self.hass.async_create_task(self._async_tick(None))
 
     @callback
@@ -1889,7 +1914,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self.hass.async_create_task(self._async_tick(None))
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        if t := kwargs.get(ATTR_TEMPERATURE):
+        if (t := kwargs.get(ATTR_TEMPERATURE)) is not None:
             self._target_temp = float(
                 max(self.min_temp, min(self.max_temp, float(t)))
             )
