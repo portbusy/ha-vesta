@@ -253,8 +253,12 @@ class TestHvacAction:
             _hvac_mode=HVACMode.HEAT,
             _cur_temp=15.0,
             _heating_season_active=False,
+            _emergency_heat_active=False,
+            _vacation_active=False,
+            _preset_mode=None,
             _window_open=False,
         )
+        e._get_global = lambda key, default: default
         e._compute_effective_target = lambda: 21.0
         assert SmartClimatePro.hvac_action.fget(e) == HVACAction.IDLE
 
@@ -275,6 +279,7 @@ class TestHvacAction:
             _hvac_mode=HVACMode.HEAT,
             _cur_temp=18.0,
             _heating_season_active=True,
+            _emergency_heat_active=False,
             _window_open=True,
         )
         e._compute_effective_target = lambda: 21.0
@@ -286,6 +291,7 @@ class TestHvacAction:
             _hvac_mode=HVACMode.HEAT,
             _cur_temp=18.0,
             _heating_season_active=True,
+            _emergency_heat_active=False,
             _window_open=False,
         )
         e._compute_effective_target = lambda: 21.0
