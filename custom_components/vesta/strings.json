@@ -174,7 +174,12 @@
     "error": {
       "missing_presence_sensors": "You must select at least one presence sensor when the override is enabled.",
       "missing_schedule_entity": "You must select a schedule entity when the override is enabled.",
-      "missing_weather_entity": "You must select a weather provider when the override is enabled."
+      "missing_weather_entity": "You must select a weather provider when the override is enabled.",
+      "circular_entity": "Vesta entities cannot be used as heaters or input sensors.",
+      "heaters_in_use": "A selected heater is already controlled by another Vesta room."
+    },
+    "abort": {
+      "already_configured": "Global settings are already configured."
     }
   },
   "options": {
@@ -285,7 +290,9 @@
     "error": {
       "missing_presence_sensors": "You must select at least one presence sensor when the override is enabled.",
       "missing_schedule_entity": "You must select a schedule entity when the override is enabled.",
-      "missing_weather_entity": "You must select a weather provider when the override is enabled."
+      "missing_weather_entity": "You must select a weather provider when the override is enabled.",
+      "circular_entity": "Vesta entities cannot be used as heaters or input sensors.",
+      "heaters_in_use": "A selected heater is already controlled by another Vesta room."
     }
   },
   "selector": {

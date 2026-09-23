@@ -1,4 +1,8 @@
+import asyncio
+from types import SimpleNamespace
 """Tests for ScheduleStore pure logic (no HA instance required)."""
+from unittest.mock import AsyncMock
+
 import pytest
 
 from custom_components.vesta.store import ScheduleStore, _time_to_minutes
@@ -44,6 +48,10 @@ class TestTimeToMinutes:
     def test_invalid_minutes_raises(self):
         with pytest.raises(ValueError):
             _time_to_minutes("10:60")
+
+    def test_non_string_time_raises_value_error(self):
+        with pytest.raises(ValueError):
+            _time_to_minutes(600)
 
     def test_boundary_max_valid(self):
         assert _time_to_minutes("23:59") == 1439
@@ -125,6 +133,10 @@ class TestGetCurrentMode:
         ])
         assert store.get_current_mode("s1", 3, "15:00") == "frost"
 
+    def test_malformed_persisted_block_is_ignored(self):
+        store = _make_store("s1", ["not-an-object"])
+        assert store.get_current_mode("s1", 0, "10:00") == "off"
+
 
 # ---------------------------------------------------------------------------
 # validate_blocks
@@ -155,6 +167,21 @@ class TestValidateBlocks:
         blocks = [{"start": "06:00", "end": "09:00", "mode": "comfort"}]
         assert self._store().validate_blocks(blocks) is not None
 
+    def test_non_object_block_returns_error(self):
+        assert self._store().validate_blocks(["not-an-object"]) is not None
+
+    def test_boolean_day_returns_error(self):
+        blocks = [
+            {"days": [True], "start": "06:00", "end": "09:00", "mode": "comfort"}
+        ]
+        assert self._store().validate_blocks(blocks) is not None
+
+    def test_non_string_time_returns_error(self):
+        blocks = [
+            {"days": [0], "start": 600, "end": "09:00", "mode": "comfort"}
+        ]
+        assert self._store().validate_blocks(blocks) is not None
+
     def test_missing_start_returns_error(self):
         blocks = [{"days": [0], "end": "09:00", "mode": "comfort"}]
         assert self._store().validate_blocks(blocks) is not None
@@ -166,6 +193,19 @@ class TestValidateBlocks:
     def test_missing_mode_returns_error(self):
         blocks = [{"days": [0], "start": "06:00", "end": "09:00"}]
         assert self._store().validate_blocks(blocks) is not None
+
+    @pytest.mark.parametrize(
+        "mode",
+        ["unknown", "temp:abc", "temp:4.9", "temp:35.1", "temp:nan", "temp:inf"],
+    )
+    def test_invalid_mode_or_custom_temperature_returns_error(self, mode):
+        blocks = [{"days": [0], "start": "06:00", "end": "09:00", "mode": mode}]
+        assert self._store().validate_blocks(blocks) is not None
+
+    @pytest.mark.parametrize("mode", ["temp:5", "temp:23.5", "temp:35"])
+    def test_valid_custom_temperature_is_accepted(self, mode):
+        blocks = [{"days": [0], "start": "06:00", "end": "09:00", "mode": mode}]
+        assert self._store().validate_blocks(blocks) is None
 
     def test_start_equals_end_returns_error(self):
         blocks = [{"days": [0], "start": "09:00", "end": "09:00", "mode": "comfort"}]
@@ -209,3 +249,19 @@ class TestValidateBlocks:
             {"days": [0], "start": "09:00", "end": "12:00", "mode": "eco"},
         ]
         assert self._store().validate_blocks(blocks) is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_update_does_not_partially_rename_schedule():
+    store = _make_store("s1", [])
+    store._lock = asyncio.Lock()
+    store._store = SimpleNamespace(async_save=AsyncMock())
+    invalid_blocks = [
+        {"days": [0], "start": "06:00", "end": "09:00", "mode": "temp:1000"}
+    ]
+
+    with pytest.raises(ValueError):
+        await store.async_update("s1", name="Changed", blocks=invalid_blocks)
+
+    assert store.get("s1")["name"] == "Test"
+    store._store.async_save.assert_not_awaited()

@@ -44,5 +44,5 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         sidebar_icon="mdi:thermometer-auto",
         module_url=f"{static_url}/vesta-panel.js?v={version}",
         embed_iframe=False,
-        require_admin=False,
+        require_admin=True,
     )

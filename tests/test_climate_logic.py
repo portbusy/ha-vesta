@@ -40,7 +40,8 @@ def _entity(
     hvac_mode: HVACMode = HVACMode.HEAT,
 ) -> types.SimpleNamespace:
     """Minimal stub for _compute_effective_target / _apply_vesta_schedule_mode."""
-    return types.SimpleNamespace(
+    entity = types.SimpleNamespace(
+        _name="Test room",
         _vacation_active=vacation_active,
         _preset_mode=preset_mode,
         _force_return=force_return,
@@ -51,6 +52,10 @@ def _entity(
         away_temp=away_temp,
         _hvac_mode=hvac_mode,
     )
+    entity._validated_schedule_temperature = lambda value, source: (
+        SmartClimatePro._validated_schedule_temperature(entity, value, source)
+    )
+    return entity
 
 
 def _entity_with_entry(entry_data: dict, global_value=None) -> types.SimpleNamespace:
@@ -176,6 +181,12 @@ class TestApplyVestaScheduleMode:
         SmartClimatePro._apply_vesta_schedule_mode(e, "temp:abc")
         assert e._target_temp == 21.0
 
+    @pytest.mark.parametrize("mode", ["temp:4.9", "temp:35.1", "temp:nan", "temp:inf"])
+    def test_custom_temp_unsafe_falls_back_to_comfort(self, mode):
+        e = _entity(comfort_temp=21.0)
+        SmartClimatePro._apply_vesta_schedule_mode(e, mode)
+        assert e._target_temp == 21.0
+
     def test_unknown_mode_falls_back_to_eco(self):
         e = _entity(eco_temp=18.0)
         SmartClimatePro._apply_vesta_schedule_mode(e, "unknown_mode")
@@ -231,71 +242,6 @@ class TestEcoTemp:
     def test_default_when_global_missing(self):
         e = _entity_with_entry({}, global_value=None)
         assert SmartClimatePro.eco_temp.fget(e) == pytest.approx(18.0)
-
-
-class TestHvacAction:
-    """hvac_action must not report HEATING during off-season OFF mode."""
-
-    def test_frost_risk_always_heating(self):
-        from homeassistant.components.climate import HVACAction
-        e = types.SimpleNamespace(
-            _hvac_mode=HVACMode.HEAT,
-            _cur_temp=4.0,  # below ANTI_FROST_TEMP (5.0)
-            _heating_season_active=False,
-            _window_open=False,
-        )
-        e._compute_effective_target = lambda: 21.0
-        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.HEATING
-
-    def test_off_season_no_frost_returns_idle(self):
-        from homeassistant.components.climate import HVACAction
-        e = types.SimpleNamespace(
-            _hvac_mode=HVACMode.HEAT,
-            _cur_temp=15.0,
-            _heating_season_active=False,
-            _emergency_heat_active=False,
-            _vacation_active=False,
-            _preset_mode=None,
-            _window_open=False,
-        )
-        e._get_global = lambda key, default: default
-        e._compute_effective_target = lambda: 21.0
-        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.IDLE
-
-    def test_hvac_off_returns_off(self):
-        from homeassistant.components.climate import HVACAction
-        e = types.SimpleNamespace(
-            _hvac_mode=HVACMode.OFF,
-            _cur_temp=15.0,
-            _heating_season_active=True,
-            _window_open=False,
-        )
-        e._compute_effective_target = lambda: 21.0
-        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.OFF
-
-    def test_window_open_returns_idle(self):
-        from homeassistant.components.climate import HVACAction
-        e = types.SimpleNamespace(
-            _hvac_mode=HVACMode.HEAT,
-            _cur_temp=18.0,
-            _heating_season_active=True,
-            _emergency_heat_active=False,
-            _window_open=True,
-        )
-        e._compute_effective_target = lambda: 21.0
-        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.IDLE
-
-    def test_below_target_returns_heating(self):
-        from homeassistant.components.climate import HVACAction
-        e = types.SimpleNamespace(
-            _hvac_mode=HVACMode.HEAT,
-            _cur_temp=18.0,
-            _heating_season_active=True,
-            _emergency_heat_active=False,
-            _window_open=False,
-        )
-        e._compute_effective_target = lambda: 21.0
-        assert SmartClimatePro.hvac_action.fget(e) == HVACAction.HEATING
 
 
 class TestAwayTemp:

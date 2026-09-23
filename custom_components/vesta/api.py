@@ -5,12 +5,10 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.config_entries import ConfigEntry
 
 from .const import (
     DOMAIN,
     CONF_ENTRY_TYPE,
-    ENTRY_TYPE_GLOBAL,
     ENTRY_TYPE_ROOM,
     CONF_OVERRIDE_SCHEDULE,
     CONF_SCHEDULE_SOURCE,
@@ -19,6 +17,20 @@ from .const import (
     SCHEDULE_SOURCE_ENTITY,
 )
 from .store import SCHEDULE_TEMPLATES
+
+
+def _get_store(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+):
+    """Return the schedule store or send an error and return None."""
+    store = hass.data.get(DOMAIN, {}).get("schedule_store")
+    if not store:
+        connection.send_error(
+            msg["id"], "store_unavailable", "Schedule store not ready"
+        )
+    return store
 
 
 @callback
@@ -48,9 +60,7 @@ def ws_list_schedules(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    store = hass.data[DOMAIN].get("schedule_store")
-    if not store:
-        connection.send_error(msg["id"], "store_unavailable", "Schedule store not ready")
+    if not (store := _get_store(hass, connection, msg)):
         return
     schedules = store.get_all()
     result = [
@@ -72,9 +82,7 @@ def ws_get_schedule(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    store = hass.data[DOMAIN].get("schedule_store")
-    if not store:
-        connection.send_error(msg["id"], "store_unavailable", "Schedule store not ready")
+    if not (store := _get_store(hass, connection, msg)):
         return
     entry = store.get(msg["schedule_id"])
     if entry is None:
@@ -86,19 +94,18 @@ def ws_get_schedule(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "vesta/schedules/create",
-        vol.Required("name"): str,
+        vol.Required("name"): vol.All(str, str.strip, vol.Length(min=1, max=100)),
         vol.Optional("template"): vol.Any(str, None),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_create_schedule(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    store = hass.data[DOMAIN].get("schedule_store")
-    if not store:
-        connection.send_error(msg["id"], "store_unavailable", "Schedule store not ready")
+    if not (store := _get_store(hass, connection, msg)):
         return
     schedule_id = await store.async_create(msg["name"], msg.get("template"))
     connection.send_result(msg["id"], {"id": schedule_id, "name": msg["name"]})
@@ -108,18 +115,17 @@ async def ws_create_schedule(
     {
         vol.Required("type"): "vesta/schedules/duplicate",
         vol.Required("schedule_id"): str,
-        vol.Required("new_name"): str,
+        vol.Required("new_name"): vol.All(str, str.strip, vol.Length(min=1, max=100)),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_duplicate_schedule(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    store = hass.data[DOMAIN].get("schedule_store")
-    if not store:
-        connection.send_error(msg["id"], "store_unavailable", "Schedule store not ready")
+    if not (store := _get_store(hass, connection, msg)):
         return
     new_id = await store.async_duplicate(msg["schedule_id"], msg["new_name"])
     if new_id is None:
@@ -132,19 +138,18 @@ async def ws_duplicate_schedule(
     {
         vol.Required("type"): "vesta/schedules/update",
         vol.Required("schedule_id"): str,
-        vol.Optional("name"): str,
+        vol.Optional("name"): vol.All(str, str.strip, vol.Length(min=1, max=100)),
         vol.Optional("blocks"): list,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_update_schedule(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    store = hass.data[DOMAIN].get("schedule_store")
-    if not store:
-        connection.send_error(msg["id"], "store_unavailable", "Schedule store not ready")
+    if not (store := _get_store(hass, connection, msg)):
         return
     try:
         ok = await store.async_update(
@@ -172,35 +177,29 @@ async def ws_update_schedule(
         vol.Required("schedule_id"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_delete_schedule(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    store = hass.data[DOMAIN].get("schedule_store")
-    if not store:
-        connection.send_error(msg["id"], "store_unavailable", "Schedule store not ready")
+    if not (store := _get_store(hass, connection, msg)):
         return
     ok = await store.async_delete(msg["schedule_id"])
     if not ok:
         connection.send_error(msg["id"], "not_found", "Schedule not found")
         return
 
-    connection.send_result(msg["id"], {"deleted": msg["schedule_id"]})
-
-    # Remove the schedule from any room or global entry that was using it
+    # Updating config entries invokes their registered listeners exactly once.
     sid = msg["schedule_id"]
-    entries_to_reload = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.data.get(CONF_VESTA_SCHEDULE_ID) == sid:
             new_data = {k: v for k, v in entry.data.items()
                         if k not in (CONF_SCHEDULE_SOURCE, CONF_VESTA_SCHEDULE_ID)}
+            new_data[CONF_OVERRIDE_SCHEDULE] = False
             hass.config_entries.async_update_entry(entry, data=new_data)
-            if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_ROOM:
-                entries_to_reload.append(entry.entry_id)
-    for eid in entries_to_reload:
-        await hass.config_entries.async_reload(eid)
+    connection.send_result(msg["id"], {"deleted": sid})
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +242,7 @@ def ws_list_rooms(
             "name": entry.title,
             "schedule_source": source,
             "vesta_schedule_id": vesta_id,
-            "schedule_inherited": CONF_SCHEDULE_SOURCE not in entry.data,
+            "schedule_inherited": CONF_SCHEDULE_SOURCE not in entry.data and not entry.data.get(CONF_OVERRIDE_SCHEDULE),
             "override_schedule": entry.data.get(CONF_OVERRIDE_SCHEDULE, False),
         })
     connection.send_result(msg["id"], result)
@@ -253,10 +252,13 @@ def ws_list_rooms(
     {
         vol.Required("type"): "vesta/rooms/assign",
         vol.Required("entry_id"): str,
-        vol.Required("schedule_source"): vol.In([SCHEDULE_SOURCE_ENTITY, SCHEDULE_SOURCE_VESTA, "inherit"]),
+        vol.Required("schedule_source"): vol.In(
+            [SCHEDULE_SOURCE_ENTITY, SCHEDULE_SOURCE_VESTA, "inherit"]
+        ),
         vol.Optional("vesta_schedule_id"): vol.Any(str, None),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_assign_room(
     hass: HomeAssistant,
@@ -264,7 +266,7 @@ async def ws_assign_room(
     msg: dict,
 ) -> None:
     entry = hass.config_entries.async_get_entry(msg["entry_id"])
-    if not entry or entry.data.get(CONF_ENTRY_TYPE) != ENTRY_TYPE_ROOM:
+    if not entry or entry.domain != DOMAIN or entry.data.get(CONF_ENTRY_TYPE) != ENTRY_TYPE_ROOM:
         connection.send_error(msg["id"], "not_found", "Room entry not found")
         return
 
@@ -274,25 +276,25 @@ async def ws_assign_room(
     if source == "inherit":
         new_data.pop(CONF_SCHEDULE_SOURCE, None)
         new_data.pop(CONF_VESTA_SCHEDULE_ID, None)
+        new_data[CONF_OVERRIDE_SCHEDULE] = False
     elif source == SCHEDULE_SOURCE_VESTA:
         vesta_id = msg.get("vesta_schedule_id")
         if not vesta_id:
             connection.send_error(msg["id"], "missing_id", "vesta_schedule_id required")
             return
+        store = hass.data.get(DOMAIN, {}).get("schedule_store")
+        if not store or store.get(vesta_id) is None:
+            connection.send_error(msg["id"], "not_found", "Schedule not found")
+            return
         new_data[CONF_SCHEDULE_SOURCE] = SCHEDULE_SOURCE_VESTA
         new_data[CONF_VESTA_SCHEDULE_ID] = vesta_id
+        new_data[CONF_OVERRIDE_SCHEDULE] = False
     else:
         new_data[CONF_SCHEDULE_SOURCE] = SCHEDULE_SOURCE_ENTITY
+        new_data.pop(CONF_VESTA_SCHEDULE_ID, None)
 
     hass.config_entries.async_update_entry(entry, data=new_data)
     connection.send_result(msg["id"], {"entry_id": msg["entry_id"], "assigned": source})
-
-    # Trigger immediate tick on this room
-    for room in hass.data[DOMAIN].get("rooms", []):
-        if getattr(room, "_entry", None) and room._entry.entry_id == msg["entry_id"]:
-            if hasattr(room, "_async_tick"):
-                hass.async_create_task(room._async_tick(None))
-
 
 # ---------------------------------------------------------------------------
 # Global schedule
@@ -324,6 +326,7 @@ def ws_get_global_schedule(
         vol.Optional("vesta_schedule_id"): vol.Any(str, None),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_set_global_schedule(
     hass: HomeAssistant,
@@ -342,12 +345,13 @@ async def ws_set_global_schedule(
         if not vesta_id:
             connection.send_error(msg["id"], "missing_id", "vesta_schedule_id required")
             return
+        store = hass.data.get(DOMAIN, {}).get("schedule_store")
+        if not store or store.get(vesta_id) is None:
+            connection.send_error(msg["id"], "not_found", "Schedule not found")
+            return
         new_data[CONF_VESTA_SCHEDULE_ID] = vesta_id
     else:
         new_data.pop(CONF_VESTA_SCHEDULE_ID, None)
 
     hass.config_entries.async_update_entry(g, data=new_data)
     connection.send_result(msg["id"], {"ok": True})
-    for room in hass.data[DOMAIN].get("rooms", []):
-        if hasattr(room, "_async_tick"):
-            hass.async_create_task(room._async_tick(None))

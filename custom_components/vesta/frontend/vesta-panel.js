@@ -26,19 +26,17 @@ function timeToMinutes(t) {
 }
 function modeFromBlock(block) {
   if (!block.mode) return "off";
-  if (block.mode.startsWith("temp:")) return "custom";
-  return block.mode;
+  const mode = block.mode.trim().toLowerCase();
+  if (mode.startsWith("temp:")) return "custom";
+  return mode;
 }
 function modeColor(block) {
   const m = modeFromBlock(block);
   return (MODES[m] || MODES.off).color;
 }
-function roundTo30Min(timeStr) {
-  const [h, m] = timeStr.split(":").map(Number);
-  const total = Math.round((h * 60 + (m || 0)) / 30) * 30;
-  const hh = Math.floor(total / 60) % 24;
-  const mm = total % 60;
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+function blockTime(value, isEnd = false) {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) return null;
+  return isEnd && value === "00:00" ? "24:00" : value;
 }
 
 class VestaPanel extends HTMLElement {
@@ -47,6 +45,8 @@ class VestaPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._hass = null;
     this._schedules = [];
+    this._selectionRequest = 0;
+    this._loadRequest = 0;
     this._selectedId = null;
     this._selectedSchedule = null;
     this._rooms = [];
@@ -74,6 +74,7 @@ class VestaPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    this._resizeObserver.observe(this);
     this._render();
     this._startNowTimer();
   }
@@ -99,7 +100,9 @@ class VestaPanel extends HTMLElement {
     return this._hass.connection.sendMessagePromise(msg);
   }
 
-  async _load() {
+  async _load(preferredId = this._selectedId) {
+    const request = ++this._loadRequest;
+    const selection = this._selectionRequest;
     this._loadError = null;
     try {
       const [schedules, rooms, templates, globalSched] = await Promise.all([
@@ -108,16 +111,23 @@ class VestaPanel extends HTMLElement {
         this._ws({ type: "vesta/schedules/templates" }),
         this._ws({ type: "vesta/global/get_schedule" }).catch(() => null),
       ]);
+      if (request !== this._loadRequest) return;
       this._schedules = schedules;
       this._rooms = rooms;
       this._templates = templates;
       this._globalSchedule = globalSched;
-      if (this._schedules.length > 0 && !this._selectedId) {
-        await this._selectSchedule(this._schedules[0].id);
+      if (this._schedules.length > 0) {
+        if (selection !== this._selectionRequest) preferredId = this._selectedId;
+        const id = this._schedules.some(s => s.id === preferredId) ? preferredId : this._schedules[0].id;
+        await this._selectSchedule(id);
       } else {
+        this._selectionRequest++;
+        this._selectedId = null;
+        this._selectedSchedule = null;
         this._render();
       }
     } catch (e) {
+      if (request !== this._loadRequest) return;
       console.error("Vesta: load error", e);
       this._loadError = "Could not connect to Vesta. Is the integration loaded?";
       this._render();
@@ -125,11 +135,17 @@ class VestaPanel extends HTMLElement {
   }
 
   async _selectSchedule(id) {
+    const request = ++this._selectionRequest;
     this._selectedId = id;
     try {
-      this._selectedSchedule = await this._ws({ type: "vesta/schedules/get", schedule_id: id });
+      const schedule = await this._ws({ type: "vesta/schedules/get", schedule_id: id });
+      if (request !== this._selectionRequest) return;
+      this._selectedSchedule = schedule;
+      this._loadError = null;
     } catch (e) {
+      if (request !== this._selectionRequest) return;
       this._selectedSchedule = null;
+      this._loadError = "Could not load the selected schedule. Please retry.";
     }
     if (this._narrow) this._sidebarOpen = false;
     this._render();
@@ -140,6 +156,11 @@ class VestaPanel extends HTMLElement {
   // -----------------------------------------------------------------------
 
   _render() {
+    // Keep the live form and its handlers while layout/data refreshes arrive.
+    if (this._dialogOpen) {
+      this._renderPending = true;
+      return;
+    }
     const root = this.shadowRoot;
     const sidebarClass = this._narrow
       ? (this._sidebarOpen ? "sidebar sidebar-drawer sidebar-open" : "sidebar sidebar-drawer")
@@ -178,7 +199,7 @@ class VestaPanel extends HTMLElement {
               <span class="mobile-topbar-title">${this._selectedSchedule ? this._escape(this._selectedSchedule.name) : "Vesta Schedules"}</span>
             </div>
           ` : ""}
-          ${this._selectedSchedule ? this._renderMain() : this._renderEmpty()}
+          ${this._selectedSchedule && !this._loadError ? this._renderMain() : this._renderEmpty()}
         </div>
       </div>
       ${this._renderDialogPlaceholder()}
@@ -368,7 +389,10 @@ class VestaPanel extends HTMLElement {
           <span class="global-info-label">Global default:</span>
           <span class="global-info-value">${this._escape(globalDesc)}</span>
           <span class="global-info-hint">(used by rooms set to "Inherits global")</span>
+          <button class="btn-secondary btn-sm" id="btn-use-global">Use this schedule globally</button>
+          ${this._globalSchedule?.schedule_source === "vesta" ? '<button class="btn-secondary btn-sm" id="btn-global-entity">Use HA schedule globally</button>' : ""}
         </div>
+        ${this._actionError ? `<p role="alert">${this._escape(this._actionError)}</p>` : ""}
         ${this._rooms.length === 0
           ? `<p class="rooms-desc">No rooms found. Add rooms via the Vesta integration settings.</p>`
           : `<div class="rooms-table-wrap">
@@ -457,6 +481,8 @@ class VestaPanel extends HTMLElement {
 
     r.getElementById("btn-add-block")?.addEventListener("click", () => this._showBlockDialog(null));
     r.getElementById("btn-rename")?.addEventListener("click", () => this._showRenameDialog());
+    r.getElementById("btn-use-global")?.addEventListener("click", () => this._setGlobalSchedule("vesta"));
+    r.getElementById("btn-global-entity")?.addEventListener("click", () => this._setGlobalSchedule("entity"));
 
     r.querySelectorAll(".block").forEach(el => {
       const open = () => {
@@ -501,6 +527,7 @@ class VestaPanel extends HTMLElement {
   // -----------------------------------------------------------------------
 
   _showDialog(html, onSubmit) {
+    this._dialogOpen = true;
     const overlay = this.shadowRoot.getElementById("dialog-overlay");
     const container = this.shadowRoot.getElementById("dialog-container");
     overlay.classList.remove("hidden");
@@ -509,12 +536,18 @@ class VestaPanel extends HTMLElement {
       <button class="dialog-close" id="d-close" aria-label="Close">✕</button>
       ${html}
     `;
-    container.querySelector("[data-dialog-submit]")?.addEventListener("click", () => onSubmit(container));
+    container.querySelector("[data-dialog-submit]")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      if (button.disabled) return;
+      button.disabled = true;
+      try { await onSubmit(container); }
+      finally { button.disabled = false; }
+    });
     container.querySelector("[data-dialog-cancel]")?.addEventListener("click", () => this._closeDialog());
     container.querySelector("#d-close")?.addEventListener("click", () => this._closeDialog());
 
     // Close on Escape, focus trap on Tab
-    container.addEventListener("keydown", (e) => {
+    container.onkeydown = (e) => {
       if (e.key === "Escape") { this._closeDialog(); return; }
       if (e.key !== "Tab") return;
       const focusable = Array.from(container.querySelectorAll(
@@ -526,7 +559,7 @@ class VestaPanel extends HTMLElement {
       const active = this.shadowRoot.activeElement;
       if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
-    });
+    };
 
     // Auto-focus first input or the submit button
     const firstInput = container.querySelector("input, select");
@@ -534,8 +567,13 @@ class VestaPanel extends HTMLElement {
   }
 
   _closeDialog() {
+    this._dialogOpen = false;
     this.shadowRoot.getElementById("dialog-overlay")?.classList.add("hidden");
     this.shadowRoot.getElementById("dialog-container")?.classList.add("hidden");
+    if (this._renderPending) {
+      this._renderPending = false;
+      this._render();
+    }
   }
 
   _showCreateDialog() {
@@ -566,8 +604,7 @@ class VestaPanel extends HTMLElement {
       try {
         const result = await this._ws({ type: "vesta/schedules/create", name, template });
         this._closeDialog();
-        await this._load();
-        await this._selectSchedule(result.id);
+        await this._load(result.id);
       } catch (e) {
         const err = container.querySelector("#d-error");
         err.textContent = "Error: " + (e.message || e);
@@ -593,8 +630,7 @@ class VestaPanel extends HTMLElement {
       try {
         const result = await this._ws({ type: "vesta/schedules/duplicate", schedule_id: scheduleId, new_name: newName });
         this._closeDialog();
-        await this._load();
-        await this._selectSchedule(result.id);
+        await this._load(result.id);
       } catch (e) {
         const err = container.querySelector("#d-error");
         err.textContent = "Error: " + (e.message || e);
@@ -621,7 +657,6 @@ class VestaPanel extends HTMLElement {
         await this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, name });
         this._closeDialog();
         await this._load();
-        await this._selectSchedule(this._selectedId);
       } catch (e) {
         const err = container.querySelector("#d-error");
         err.textContent = "Error: " + (e.message || e);
@@ -671,8 +706,8 @@ class VestaPanel extends HTMLElement {
     this._showDialog(`
       <h3 id="d-title">${isEdit ? "Edit Block" : "Add Block"}</h3>
       <div class="form-row">
-        <label>Start<br><input id="d-start" type="time" value="${b.start}" step="1800" /></label>
-        <label>End<br><input id="d-end" type="time" value="${b.end}" step="1800" /></label>
+        <label>Start<br><input id="d-start" type="time" value="${b.start}" step="60" /></label>
+        <label>End (00:00 = midnight)<br><input id="d-end" type="time" value="${b.end === "24:00" ? "00:00" : b.end}" step="60" /></label>
       </div>
       <label>Mode<br><select id="d-mode">${modeOptions}</select></label>
       <div id="d-temp-row" style="display:${currentMode === "custom" ? "block" : "none"}">
@@ -694,8 +729,8 @@ class VestaPanel extends HTMLElement {
         <button data-dialog-submit class="btn-primary">Save</button>
       </div>
     `, async (container) => {
-      const start = roundTo30Min(container.querySelector("#d-start").value);
-      const end = roundTo30Min(container.querySelector("#d-end").value);
+      const start = blockTime(container.querySelector("#d-start").value);
+      const end = blockTime(container.querySelector("#d-end").value, true);
       const modeVal = container.querySelector("#d-mode").value;
       const temp = container.querySelector("#d-temp")?.value;
       const days = Array.from(container.querySelectorAll(".day-cb input:checked")).map(el => Number(el.value));
@@ -704,8 +739,14 @@ class VestaPanel extends HTMLElement {
       if (days.length === 0) {
         err.textContent = "Select at least one day."; err.classList.remove("hidden"); return;
       }
+      if (!start || !end) {
+        err.textContent = "Enter both start and end times."; err.classList.remove("hidden"); return;
+      }
       if (timeToMinutes(start) >= timeToMinutes(end)) {
         err.textContent = "Start time must be before end time."; err.classList.remove("hidden"); return;
+      }
+      if (modeVal === "custom" && (!temp || !Number.isFinite(Number(temp)) || Number(temp) < 5 || Number(temp) > 35)) {
+        err.textContent = "Temperature must be between 5 and 35 °C."; err.classList.remove("hidden"); return;
       }
       const mode = modeVal === "custom" ? `temp:${parseFloat(temp).toFixed(1)}` : modeVal;
       const newBlock = { days, start, end, mode };
@@ -745,7 +786,11 @@ class VestaPanel extends HTMLElement {
           blocks.splice(existingIndex, 1);
           this._ws({ type: "vesta/schedules/update", schedule_id: this._selectedId, blocks })
             .then(() => { this._closeDialog(); return this._selectSchedule(this._selectedId); })
-            .catch(err => console.error(err));
+            .catch(error => {
+              const message = dc.querySelector("#d-error");
+              message.textContent = "Error: " + (error.message || error);
+              message.classList.remove("hidden");
+            });
         } else {
           btn.dataset.confirm = "1";
           btn.textContent = "Confirm delete?";
@@ -760,7 +805,21 @@ class VestaPanel extends HTMLElement {
     }
   }
 
+  async _setGlobalSchedule(source) {
+    this._actionError = null;
+    const message = { type: "vesta/global/set_schedule", schedule_source: source };
+    if (source === "vesta") message.vesta_schedule_id = this._selectedId;
+    try {
+      await this._ws(message);
+      await this._load();
+    } catch (error) {
+      this._actionError = "Could not change the global schedule: " + (error.message || error);
+      this._render();
+    }
+  }
+
   async _assignRoom(entryId, source, scheduleId, triggerBtn) {
+    this._actionError = null;
     if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "Saving…"; }
     const msg = { type: "vesta/rooms/assign", entry_id: entryId, schedule_source: source };
     if (source === "vesta") msg.vesta_schedule_id = scheduleId;
@@ -769,11 +828,13 @@ class VestaPanel extends HTMLElement {
       this._rooms = await this._ws({ type: "vesta/rooms/list" });
       this._render();
     } catch (e) {
+      this._actionError = "Could not assign the room: " + (e.message || e);
       console.error("Assign room error", e);
       if (triggerBtn) {
         triggerBtn.disabled = false;
         triggerBtn.textContent = source === "vesta" ? "Assign" : "Reset to global";
       }
+      this._render();
     }
   }
 

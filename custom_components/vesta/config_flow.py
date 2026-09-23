@@ -20,6 +20,7 @@ from .const import (
     CONF_ENTRY_TYPE,
     ENTRY_TYPE_GLOBAL,
     ENTRY_TYPE_ROOM,
+    MANUAL_OVERRIDE_MODE_OPTIONS,
     CONF_HEATER_ENTITIES,
     CONF_SENSOR,
     CONF_WINDOW_SENSOR,
@@ -68,6 +69,32 @@ from .const import (
     SCHEDULE_SOURCE_VESTA,
     DEFAULT_NAME,
 )
+
+# --- Helpers ---
+
+
+def _normalize_to_list(raw) -> list[str]:
+    """Normalise a stored entity field to list[str]: str → [str], list → filtered, None → []."""
+    if isinstance(raw, list):
+        return [x for x in raw if x]
+    if raw:
+        return [raw]
+    return []
+
+
+def _validate_room_entities(hass, data, errors, entry_id=None):
+    registry = er.async_get(hass)
+    for entity_id in data.get(CONF_HEATER_ENTITIES, []) + _normalize_to_list(data.get(CONF_SENSOR)):
+        entity = registry.async_get(entity_id)
+        if entity and entity.platform == DOMAIN:
+            errors["base"] = "circular_entity"
+            return
+    heaters = set(data.get(CONF_HEATER_ENTITIES, []))
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.entry_id != entry_id and heaters.intersection(entry.data.get(CONF_HEATER_ENTITIES, [])):
+            errors["base"] = "heaters_in_use"
+            return
+
 
 # --- Temp selector builder ---
 
@@ -130,14 +157,10 @@ def _optional_entity(
     value,
     cfg: selector.EntitySelectorConfig,
 ) -> dict:
-    """Return {vol.Optional(key): EntitySelector} with default set only when value is truthy.
-
-    Passing default=None to an EntitySelector raises a voluptuous validation
-    error, so we only set the default when there is an actual value to show.
-    """
+    """Suggest the current entity without restoring a field the user clears."""
     sel = selector.EntitySelector(cfg)
     if value:
-        return {vol.Optional(key, default=value): sel}
+        return {vol.Optional(key, description={"suggested_value": value}): sel}
     return {vol.Optional(key): sel}
 
 
@@ -238,15 +261,7 @@ def _overrides_schema(
             default=d.get(CONF_MANUAL_OVERRIDE_MODE) or g.get(CONF_MANUAL_OVERRIDE_MODE, MANUAL_OVERRIDE_TIMER),
         ): selector.SelectSelector(
             selector.SelectSelectorConfig(
-                options=[
-                    MANUAL_OVERRIDE_TIMER,
-                    MANUAL_OVERRIDE_NEXT_SCHEDULE,
-                    MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
-                    MANUAL_OVERRIDE_ON_ARRIVAL,
-                    MANUAL_OVERRIDE_ON_DEPARTURE,
-                    MANUAL_OVERRIDE_PERMANENT,
-                    MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
-                ],
+                options=MANUAL_OVERRIDE_MODE_OPTIONS,
                 translation_key="manual_override_mode",
                 mode=selector.SelectSelectorMode.LIST,
             )
@@ -275,23 +290,24 @@ def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
     Returns both the default values (entity IDs) and the full option lists
     for SelectSelector so the user only sees entities from the area.
 
-    Checks both the entity's own area_id AND its device's area_id, because
-    most entities inherit the area from their device rather than having it
-    set directly on the entity entry.
+    An explicit entity area takes precedence over its device's area. Use
+    HA's registry helper to include child devices inheriting a parent's area.
     """
     entity_reg = er.async_get(hass)
     device_reg = dr.async_get(hass)
+    area_device_ids = {
+        device.id for device in dr.async_entries_for_area(device_reg, area_id)
+    }
 
     entities = []
     for entry in entity_reg.entities.values():
-        if entry.disabled:
+        if entry.disabled or entry.platform == DOMAIN:
             continue
-        if entry.area_id == area_id:
-            entities.append(entry)
-        elif entry.device_id:
-            device = device_reg.async_get(entry.device_id)
-            if device and device.area_id == area_id:
+        if entry.area_id is not None:
+            if entry.area_id == area_id:
                 entities.append(entry)
+        elif entry.device_id in area_device_ids:
+            entities.append(entry)
 
     heater_ids: list[str] = []
     temp_ids: list[str] = []
@@ -331,7 +347,7 @@ def _discover_entities_for_area(hass, area_id: str) -> dict[str, Any]:
 class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Vesta."""
 
-    VERSION = 7
+    VERSION = 8
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -391,6 +407,10 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Handle global settings."""
+        if _get_global_entry(self.hass) is not None:
+            return self.async_abort(reason="already_configured")
+        await self.async_set_unique_id("global")
+        self._abort_if_unique_id_configured()
         if user_input is not None:
             user_input = _merge_annual_energy(user_input, {})
             user_input[CONF_ENTRY_TYPE] = ENTRY_TYPE_GLOBAL
@@ -553,6 +573,7 @@ class SmartClimateProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             _validate_overrides(user_input, errors)
+            _validate_room_entities(self.hass, user_input, errors)
             if not errors:
                 flat_data = _flatten_overrides(user_input)
                 flat_data[CONF_ENTRY_TYPE] = ENTRY_TYPE_ROOM
@@ -698,7 +719,13 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         """Update global settings."""
         if user_input is not None:
             user_input = _merge_annual_energy(user_input, self.config_entry.data)
-            new_data = {**self.config_entry.data, **user_input}
+            optional_keys = {
+                CONF_PRESENCE_SENSORS, CONF_SCHEDULE, CONF_WEATHER, CONF_OVERRIDE_SWITCH,
+                CONF_VACATION_ENTITY, CONF_HEATING_SEASON_ENTITY, CONF_BOILER_ENTITY,
+                CONF_ENERGY_PRICE_KWH,
+            }
+            new_data = {k: v for k, v in self.config_entry.data.items() if k not in optional_keys}
+            new_data.update(user_input)
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
             )
@@ -792,15 +819,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
             )
         ] = selector.SelectSelector(
             selector.SelectSelectorConfig(
-                options=[
-                    MANUAL_OVERRIDE_TIMER,
-                    MANUAL_OVERRIDE_NEXT_SCHEDULE,
-                    MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
-                    MANUAL_OVERRIDE_ON_ARRIVAL,
-                    MANUAL_OVERRIDE_ON_DEPARTURE,
-                    MANUAL_OVERRIDE_PERMANENT,
-                    MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
-                ],
+                options=MANUAL_OVERRIDE_MODE_OPTIONS,
                 translation_key="manual_override_mode",
                 mode=selector.SelectSelectorMode.LIST,
             )
@@ -853,7 +872,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         ))
         price = current.get(CONF_ENERGY_PRICE_KWH)
         if price:
-            schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH, default=float(price))] = price_sel
+            schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH, description={"suggested_value": float(price)})] = price_sel
         else:
             schema_dict[vol.Optional(CONF_ENERGY_PRICE_KWH)] = price_sel
 
@@ -879,11 +898,12 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             _validate_overrides(user_input, errors)
+            _validate_room_entities(self.hass, user_input, errors, self.config_entry.entry_id)
             if not errors:
                 flat_data = _flatten_overrides(user_input)
                 new_data = {**self.config_entry.data, **flat_data}
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry, data=new_data
+                    self.config_entry, data=new_data, title=flat_data.get(CONF_NAME, self.config_entry.title)
                 )
                 return self.async_create_entry(title="", data={})
 
@@ -910,20 +930,9 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     d.get("heater_ids", []) + current.get(CONF_HEATER_ENTITIES, [])
                 )
             )
-            raw_saved_sensor = current.get(CONF_SENSOR)
-            saved_sensor = (
-                raw_saved_sensor
-                if isinstance(raw_saved_sensor, list)
-                else ([raw_saved_sensor] if raw_saved_sensor else [])
-            )
-            temp_ids = list(
-                dict.fromkeys(d.get("temp_ids", []) + saved_sensor)
-            )
-            raw_saved_window = current.get(CONF_WINDOW_SENSOR)
-            saved_window: list[str] = (
-                raw_saved_window if isinstance(raw_saved_window, list)
-                else ([raw_saved_window] if isinstance(raw_saved_window, str) and raw_saved_window else [])
-            )
+            saved_sensor = _normalize_to_list(current.get(CONF_SENSOR))
+            temp_ids = list(dict.fromkeys(d.get("temp_ids", []) + saved_sensor))
+            saved_window = _normalize_to_list(current.get(CONF_WINDOW_SENSOR))
             window_ids = list(dict.fromkeys(d.get("window_ids", []) + saved_window))
 
             if heater_ids:
@@ -993,11 +1002,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     domain=["climate", "switch", "water_heater"], multiple=True
                 )
             )
-            raw_sensor = current.get(CONF_SENSOR)
-            sensor = (
-                raw_sensor if isinstance(raw_sensor, list)
-                else ([raw_sensor] if raw_sensor else [])
-            )
+            sensor = _normalize_to_list(current.get(CONF_SENSOR))
             schema_dict[
                 vol.Required(CONF_SENSOR, **({"default": sensor} if sensor else {}))
             ] = selector.EntitySelector(
@@ -1005,11 +1010,7 @@ class SmartClimateProOptionsFlow(config_entries.OptionsFlow):
                     domain="sensor", device_class="temperature", multiple=True
                 )
             )
-            raw_win = current.get(CONF_WINDOW_SENSOR)
-            win_default: list[str] = (
-                raw_win if isinstance(raw_win, list)
-                else ([raw_win] if isinstance(raw_win, str) and raw_win else [])
-            )
+            win_default = _normalize_to_list(current.get(CONF_WINDOW_SENSOR))
             schema_dict[
                 vol.Optional(CONF_WINDOW_SENSOR, default=win_default)
             ] = selector.EntitySelector(

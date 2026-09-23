@@ -155,7 +155,11 @@ class VestaSavingsSensor(SensorEntity):
         )
         if current is not None and current is not self._climate:
             self._climate = current
-        return self._climate
+        return current
+
+    @property
+    def available(self):
+        return self._get_climate() is not None
 
     @property
     def native_value(self):

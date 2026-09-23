@@ -171,7 +171,12 @@
     "error": {
       "missing_presence_sensors": "Devi selezionare almeno un sensore di presenza quando l'override è attivo.",
       "missing_schedule_entity": "Devi selezionare un'entità programmazione quando l'override è attivo.",
-      "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo."
+      "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo.",
+      "circular_entity": "Le entità Vesta non possono essere usate come riscaldatori o sensori di ingresso.",
+      "heaters_in_use": "Uno dei riscaldatori è già controllato da un’altra stanza Vesta."
+    },
+    "abort": {
+      "already_configured": "Le impostazioni globali sono già configurate."
     }
   },
   "options": {
@@ -283,7 +288,9 @@
     "error": {
       "missing_presence_sensors": "Devi selezionare almeno un sensore di presenza quando l'override è attivo.",
       "missing_schedule_entity": "Devi selezionare un'entità programmazione quando l'override è attivo.",
-      "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo."
+      "missing_weather_entity": "Devi selezionare un fornitore meteo quando l'override è attivo.",
+      "circular_entity": "Le entità Vesta non possono essere usate come riscaldatori o sensori di ingresso.",
+      "heaters_in_use": "Uno dei riscaldatori è già controllato da un’altra stanza Vesta."
     }
   },
   "selector": {

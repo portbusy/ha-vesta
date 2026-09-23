@@ -39,7 +39,9 @@ Every minute, Vesta evaluates each room and decides whether to turn the heater o
 5. **Away mode** — When everyone is away, rooms hold at the away temperature regardless of the schedule. The schedule resumes automatically when someone returns.
 6. **Pre-heating on return** — Vesta tracks whether you are actively approaching home (GPS distance decreasing between ticks). When you are, it calculates how long the room needs to reach comfort temperature vs. how long until you arrive, and starts heating early. Stationary presence near home (office, friend's house) does not trigger pre-heating.
 7. **Schedule** — When you're home, a Home Assistant schedule helper controls when comfort temperature applies and when the room should be at a lower eco temperature.
-8. **Manual override** — You can set any temperature directly from the UI, a TRV physical dial, or an external app. A manual temperature set via the UI always takes effect even during off-season. Physical TRV overrides are immune to presence-based departure transitions and persist until reverted by the configured revert mode (timer, next schedule change, on arrival/departure, or permanent).
+8. **Manual override** — You can set a temperature directly from the UI, a TRV physical dial, or an external app. Heating-season settings and safety priorities still apply. Physical TRV overrides are preserved through presence changes and revert according to timer or schedule rules, or remain permanent when configured that way.
+
+An explicit **Off** command remains in effect across schedule changes and restarts until you select Heat, a preset, or a new manual temperature. Frost protection and emergency heat retain priority; off-season behaviour is configured separately.
 
 ### Thermal learning
 
@@ -88,6 +90,9 @@ Vesta includes a built-in visual schedule editor accessible directly from the Ho
 - **Duplicate** — copy any schedule to use as a starting point for a new one
 - **Room assignments** — the Rooms tab lets you assign any schedule to specific rooms. Unassigned rooms automatically inherit the global schedule
 - **Global schedule** — set a Vesta-native schedule as the global default directly from the panel
+- **Minute precision and midnight** — block times retain their exact minutes. Set the end to `00:00` for the end of the selected day (`24:00` internally). For an overnight interval, create one block ending at midnight and another on the following day
+
+Outside native Vesta blocks, heating is off (frost protection remains active). A Home Assistant Schedule helper instead uses eco temperature while its state is OFF. Away and Vacation presets keep their respective temperature targets regardless of scheduled gaps.
 
 ### How it relates to HA Schedule helpers
 
@@ -131,8 +136,8 @@ When you set a temperature manually (from the UI, a TRV dial, or an external app
 | Mode | Behaviour |
 |------|-----------|
 | **Timer** | Reverts after a fixed duration (default 4 h, configurable). |
-| **Next schedule change** | Reverts at the next ON→OFF or OFF→ON transition of the schedule. |
-| **Next schedule ON** | Reverts only when the schedule turns ON (comfort period starts). |
+| **Next schedule change** | Reverts at the next block boundary, including consecutive blocks with the same mode. |
+| **Next schedule ON** | Reverts at the next active block, skipping OFF periods. |
 | **On arrival** | Reverts when someone arrives home. |
 | **On departure** | Switches to Away mode when everyone leaves. |
 | **Permanent** | Holds until you change it manually again. |
@@ -193,13 +198,13 @@ Global settings apply to all rooms by default. When editing a room, you can over
 
 ## Energy savings tracking
 
-Each room creates 10 sensor entities that can be added directly to your dashboard.
+Each room creates 11 sensor entities, including **Target Temperature**, that can be added directly to your dashboard.
 
 **Daily (reset at midnight):**
 
 | Sensor | Description |
 |--------|-------------|
-| `Heating Minutes Today` | Minutes the heater was actually on today |
+| `Heating Minutes Today` | Minutes Vesta requested heat today; this is a demand estimate, not measured boiler run time |
 | `Saved Away Hours Today` | Hours in away mode (heater suppressed) |
 | `Saved Window Hours Today` | Hours heating was suppressed due to open window |
 | `Saved Eco Hours Today` | Hours in eco temperature (schedule below comfort) |
@@ -208,12 +213,12 @@ Each room creates 10 sensor entities that can be added directly to your dashboar
 
 | Sensor | Description |
 |--------|-------------|
-| `Heating Hours Month` | Total heating hours this month |
+| `Heating Hours Month` | Total hours Vesta requested heat this month |
 | `Saved Away Hours Month` | Total away-mode suppression hours this month |
 | `Saved Window Hours Month` | Total window-suppression hours this month |
 | `Saved Eco Hours Month` | Total eco hours this month |
 
-**Optional — shown only when energy data is configured:**
+**Optional — values available when energy data is configured:**
 
 | Sensor | Description |
 |--------|-------------|

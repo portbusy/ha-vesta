@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections import deque
-from datetime import datetime, timedelta, date
+from datetime import timedelta, date
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -82,8 +83,6 @@ from .const import (
     ATTR_HEATING_SEASON,
     ATTR_OUTDOOR_TEMP,
     SEASON_OFFMODE_OPEN,
-    SEASON_OFFMODE_FROST,
-    SEASON_OFFMODE_OFF,
     CONF_SCHEDULE_SOURCE,
     CONF_VESTA_SCHEDULE_ID,
     SCHEDULE_SOURCE_VESTA,
@@ -99,6 +98,9 @@ from .const import (
     ATTR_SAVINGS_KWH_MONTH,
     ATTR_SAVINGS_EUR_MONTH,
 )
+from .store import MAX_SCHEDULE_TEMP, MIN_SCHEDULE_TEMP
+from .control import decide_control
+from .temperature import as_celsius, finite_float, native_target
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -166,18 +168,19 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._outdoor_temp: float | None = None
         self._target_temp: float | None = None
         self._hvac_mode = HVACMode.HEAT
+        self._user_hvac_off = False
         self._preset_mode = MODE_SMART_SCHEDULE
         # Per-sensor window state: {entity_id: is_ajar}
         self._window_states: dict[str, bool] = {eid: False for eid in self._window_sensor_ids}
         # Per-sensor timestamp when ajar started
         self._window_ajar_since: dict[str, float | None] = {eid: None for eid in self._window_sensor_ids}
-        self._window_ajar = False
         self._window_open = False
         self._vacation_active = False
         self._emergency_heat_active = False
         self._heating_season_active = True
         self._force_return = False
         self._nearest_distance = 0.0
+        self._approach_detected_at = 0.0
         self._last_nearest_distance = 0.0
         self._was_any_home = False
         self._schedule_state_at_override: str | None = None
@@ -233,13 +236,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         self._heater_states: dict[str, bool] = {}          # entity_id → active
         self._heater_targets: dict[str, float | None] = {} # entity_id → target (climate only)
         self._last_heater_cmd_time: float = 0.0            # grace period after any climate cmd
-        self._last_external_override_time: float = 0.0  # fix 4: multi-TRV debounce
+        self._last_external_override_time: float = 0.0  # multi-TRV debounce
         self._manual_start_time: float | None = None
         self._hardware_failure = False
+        self._failsafe_heating_active = False
         self._stuck_check_time: float | None = None
         self._stuck_check_temp: float | None = None
         self._window_stuck_warned: dict[str, bool] = {}  # per-sensor stuck warning flag
         self._event_listeners: list = []
+        self._removed = False
         self._tick_running: bool = False
         self._tick_pending: bool = False  # re-run tick immediately after current one completes
         # True when the current manual override originated from a physical TRV
@@ -294,6 +299,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             ),
             "preset_mode": self._preset_mode,
             "target_temp": self._target_temp,
+            "_user_hvac_off": self._user_hvac_off,
             "manual_start_time": self._manual_start_time,
             # Savings — daily
             ATTR_SAVED_AWAY_H_TODAY: round(self._daily_away_s / 3600, 2),
@@ -323,35 +329,34 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             "_monthly_hdh_base": self._monthly_hdh_base,
             "_last_savings_reset_month": self._last_savings_reset_month,
             "_was_any_home": self._was_any_home,
+            "_daily_usage_seconds": self._daily_usage_seconds,
+            "_daily_away_s": self._daily_away_s,
+            "_daily_window_s": self._daily_window_s,
+            "_daily_eco_s": self._daily_eco_s,
             "_window_ajar_since": self._window_ajar_since,
         }
-        attrs.update(self._compute_savings_est())
+        attrs.update(self._savings_cache)
         attrs["active_control_reason"] = self._active_control_reason()
         return attrs
 
     def _active_control_reason(self) -> str:
-        """Return a human-readable string explaining the current control decision."""
-        if self._hvac_mode == HVACMode.OFF:
-            return "hvac_off"
-        if self._emergency_heat_active:
-            return "emergency_heat"
+        decision = self._control_decision()
+        if decision.reason != "normal":
+            return decision.reason
         if self._vacation_active or self._preset_mode == MODE_VACATION:
             return "vacation_frost_protection"
-        if not self._heating_season_active:
-            if self._cur_temp is not None and self._cur_temp < ANTI_FROST_TEMP:
-                return "off_season_frost_risk"
-            return "heating_season_off"
-        if self._window_open:
-            return "window_open"
         if self._force_return:
             return "pre_heating_return"
-        if self._preset_mode == MODE_MANUAL:
-            return "manual_override"
-        if self._preset_mode == MODE_AWAY:
-            return "away_mode"
-        if self._preset_mode == MODE_SMART_SCHEDULE:
-            return "smart_schedule"
-        return "normal"
+        return self._preset_mode
+
+    def _resume_schedule(self):
+        self._preset_mode = MODE_SMART_SCHEDULE
+        self._force_return = False
+        self._schedule_state_at_override = None
+        self._is_external_override = False
+        self._manual_paused_for_away = False
+        self._away_set_by_presence = False
+        self._manual_start_time = None
 
     def _get_manual_override_mode(self) -> str:
         """Return the effective manual override revert mode for this room."""
@@ -380,7 +385,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if mode not in (MANUAL_OVERRIDE_TIMER, MANUAL_OVERRIDE_TIMER_OR_SCHEDULE):
             return 0
         elapsed = (time.time() - self._manual_start_time) / 60
-        return max(0, int((self._get_manual_override_hours() * 60) - elapsed))
+        return max(0, math.ceil((self._get_manual_override_hours() * 60) - elapsed))
 
     def _resolve_schedule_source(self) -> tuple[str | None, str | None]:
         """Return (source_type, ref) for the effective schedule.
@@ -389,16 +394,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         ref: entity_id (for "entity") or schedule UUID (for "vesta"), or None
         """
         g = self.hass.data[DOMAIN].get("global")
-        # Room override: room has its own HA entity schedule
-        if self._entry.data.get(CONF_OVERRIDE_SCHEDULE):
-            sched_id = self._entry.data.get(CONF_SCHEDULE)
-            if sched_id:
-                return ("entity", sched_id)
-            # Override enabled but no entity set: fall through to global
-        # Room-level Vesta schedule override
-        if self._entry.data.get(CONF_SCHEDULE_SOURCE) == SCHEDULE_SOURCE_VESTA:
+        # An explicit panel assignment has priority over legacy room overrides.
+        source = self._entry.data.get(CONF_SCHEDULE_SOURCE)
+        if source == SCHEDULE_SOURCE_VESTA:
             sched_id = self._entry.data.get(CONF_VESTA_SCHEDULE_ID)
             return ("vesta", sched_id) if sched_id else (None, None)
+        if self._entry.data.get(CONF_OVERRIDE_SCHEDULE):
+            if sched_id := self._entry.data.get(CONF_SCHEDULE):
+                return ("entity", sched_id)
+        if source == "entity":
+            sched_id = g.data.get(CONF_SCHEDULE) if g else None
+            return ("entity", sched_id) if sched_id else (None, None)
         if not g:
             return (None, None)
         # Global Vesta schedule
@@ -435,32 +441,59 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if mode in mode_map:
             self._target_temp = mode_map[mode]
         elif mode.startswith("temp:"):
-            try:
-                self._target_temp = float(mode.split(":", 1)[1])
-            except ValueError:
-                self._target_temp = self.comfort_temp
+            target = self._validated_schedule_temperature(
+                mode.split(":", 1)[1], "Vesta schedule"
+            )
+            self._target_temp = target if target is not None else self.comfort_temp
         else:
             self._target_temp = self.eco_temp
 
+    def _validated_schedule_temperature(
+        self, value: Any, source: str
+    ) -> float | None:
+        """Return a safe schedule temperature, logging and rejecting invalid values."""
+        try:
+            temperature = float(value)
+        except (TypeError, ValueError):
+            _LOGGER.warning("%s: ignoring invalid temperature from %s", self._name, source)
+            return None
+        if (
+            not math.isfinite(temperature)
+            or temperature < MIN_SCHEDULE_TEMP
+            or temperature > MAX_SCHEDULE_TEMP
+        ):
+            _LOGGER.warning(
+                "%s: ignoring out-of-range temperature %r from %s (allowed %.0f–%.0f°C)",
+                self._name,
+                value,
+                source,
+                MIN_SCHEDULE_TEMP,
+                MAX_SCHEDULE_TEMP,
+            )
+            return None
+        return temperature
+
+    def _schedule_marker(self, source, ref):
+        """Track block boundaries, including adjacent blocks with the same mode."""
+        if source == "entity":
+            state = self.hass.states.get(ref)
+            if state and state.state not in ("unknown", "unavailable"):
+                data = self._get_current_schedule_block_data(ref)
+                return f"{state.state}|{state.attributes.get('next_event')}|{sorted(data.items())}"
+        elif source == "vesta":
+            store = self.hass.data[DOMAIN].get("schedule_store")
+            now = dt_util.now()
+            block = store.get_current_block(ref, now.weekday(), now.strftime("%H:%M")) if store else None
+            return f"{now.date()}|{sorted(block.items())}" if block else "vesta|off"
+        return None
+
     def _record_schedule_state_for_override(self) -> None:
-        """Snapshot the current schedule state so schedule-based revert modes can detect transitions."""
-        mode = self._get_manual_override_mode()
-        if mode not in (
-            MANUAL_OVERRIDE_NEXT_SCHEDULE,
-            MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
+        """Snapshot the active block when a schedule-based override starts."""
+        if self._get_manual_override_mode() in (
+            MANUAL_OVERRIDE_NEXT_SCHEDULE, MANUAL_OVERRIDE_NEXT_SCHEDULE_ON,
             MANUAL_OVERRIDE_TIMER_OR_SCHEDULE,
         ):
-            self._schedule_state_at_override = None
-            return
-        source_type, sched_ref = self._resolve_schedule_source()
-        if source_type == "vesta" and sched_ref:
-            # For Vesta schedules, snapshot the current mode string
-            self._schedule_state_at_override = self._get_vesta_schedule_mode(sched_ref)
-        elif source_type == "entity" and sched_ref:
-            if s := self.hass.states.get(sched_ref):
-                self._schedule_state_at_override = s.state
-            else:
-                self._schedule_state_at_override = None
+            self._schedule_state_at_override = self._schedule_marker(*self._resolve_schedule_source())
         else:
             self._schedule_state_at_override = None
 
@@ -473,12 +506,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             or not self._heating_season_active
         ):
             return
+        temp = finite_float(temp)
+        if temp is None or not self.min_temp <= temp <= self.max_temp:
+            return
+        self._manual_paused_for_away = False
+        self._away_set_by_presence = False
+        self._user_hvac_off = False
         self._last_external_override_time = time.time()  # debounce multi-TRV
         self._target_temp = temp
-        # Sync all climate entities' known targets so none triggers a second override
-        for eid in self._heaters:
-            if eid.split(".")[0] == "climate":
-                self._heater_targets[eid] = temp
         self._preset_mode = MODE_MANUAL
         self._hvac_mode = HVACMode.HEAT  # physical action always implies intent to heat
         self._force_return = False
@@ -505,7 +540,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         ) * 100.0
 
     def _estimate_heater_power(
-        self, switch_on: bool, climate_active: bool, target: float
+        self, target: float | None
     ) -> float:
         """Estimate combined heating power fraction [0.0-1.0] across all heaters.
 
@@ -521,7 +556,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     contributions.append(0.0)
                     continue
                 state = self.hass.states.get(eid)
-                trv_temp = state.attributes.get("current_temperature") if state else None
+                trv_temp = as_celsius(state, "current_temperature", hass=self.hass)
                 if trv_temp is not None:
                     try:
                         fraction = min(1.0, max(0.0, (target - float(trv_temp)) / 2.0))
@@ -538,8 +573,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Reset daily counters at midnight and monthly counters on the 1st."""
         now = dt_util.now()
         today = now.date()
-        month = now.month
+        month = now.year * 100 + now.month
 
+        if self._last_savings_reset_month == now.month and self._last_usage_reset_date and self._last_usage_reset_date.year == now.year:
+            self._last_savings_reset_month = month
         if self._last_savings_reset_month != month:
             self._monthly_actual_heating_s = 0
             self._monthly_away_s = 0
@@ -560,7 +597,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     def _compute_cur_temp(self) -> float | None:
         """Average configured sensor readings; fall back to TRV internal sensor."""
-        values = [v for v in self._sensor_readings.values() if v is not None]
+        for sid in self._sensor_ids:
+            self._sensor_readings[sid] = as_celsius(self.hass.states.get(sid))
+        values = [v for raw in self._sensor_readings.values() if (v := finite_float(raw)) is not None]
         if values:
             return sum(values) / len(values)
         # Fallback: read current_temperature attribute from any available climate heater.
@@ -569,20 +608,47 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             if eid.split(".")[0] == "climate":
                 state = self.hass.states.get(eid)
                 if state and state.state not in ("unavailable", "unknown"):
-                    temp = state.attributes.get("current_temperature")
-                    if temp is not None:
-                        try:
-                            return float(temp)
-                        except (ValueError, TypeError):
-                            pass
+                    if (temp := as_celsius(state, "current_temperature", hass=self.hass)) is not None:
+                        return temp
         return None
+
+    def _update_window_state(self, now_ts: float | None = None) -> None:
+        """Derive the effective window state from all configured sensors."""
+        any_ajar = any(self._window_states.values())
+        if not any_ajar:
+            self._window_open = False
+            return
+
+        delay_min = float(self._entry.data.get(CONF_WINDOW_DELAY, 0))
+        current_ts = time.time() if now_ts is None else now_ts
+        window_open = False
+        for eid, is_ajar in self._window_states.items():
+            if not is_ajar:
+                continue
+            since = self._window_ajar_since.get(eid)
+            if since is None:
+                continue
+            elapsed_min = (current_ts - since) / 60
+            if delay_min <= 0 or elapsed_min >= delay_min:
+                window_open = True
+            hours_open = (current_ts - since) / 3600
+            if hours_open > 2 and not self._window_stuck_warned.get(eid, False):
+                _LOGGER.warning(
+                    "%s: window sensor %s has been reporting open for %.0f hours. "
+                    "Check whether the sensor is stuck.",
+                    self._name,
+                    eid,
+                    hours_open,
+                )
+                self._window_stuck_warned[eid] = True
+        self._window_open = window_open
 
     async def _async_tick(self, now):
         """Robust Heartbeat with Fail-Safe checks."""
         # Guard: if this entity has been removed from hass (e.g. during reload) skip
-        if self._entry.entry_id not in self.hass.data.get(DOMAIN, {}).get(
+        if self.hass.data.get(DOMAIN, {}).get(
             "climate_entities_by_entry", {}
-        ):
+        ).get(self._entry.entry_id) is not self:
             return
 
         # Guard: prevent concurrent tick executions. User-initiated calls (now=None)
@@ -594,11 +660,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             return
         self._tick_running = True
         try:
-            await self._async_tick_impl(now)
-            # If a user action arrived while we were running, execute it now
-            if self._tick_pending:
+            next_tick_time = now
+            while True:
                 self._tick_pending = False
-                await self._async_tick_impl(None)
+                await self._async_tick_impl(next_tick_time)
+                if self.hass.data.get(DOMAIN, {}).get("climate_entities_by_entry", {}).get(self._entry.entry_id) is not self:
+                    break
+                if not self._tick_pending:
+                    break
+                next_tick_time = None
         finally:
             self._tick_running = False
             self._tick_pending = False
@@ -614,9 +684,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # Recompute cur_temp on every tick — also picks up TRV fallback when
         # configured sensors are offline
         self._cur_temp = self._compute_cur_temp()
-
-        await self._update_state()
-        self._update_force_return()
+        self._failsafe_heating_active = False
 
         # 1. Manual revert guard (timer modes)
         if self._preset_mode == MODE_MANUAL:
@@ -627,130 +695,23 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                         "Manual override timed out for %s. Returning to schedule.",
                         self._name,
                     )
-                    self._preset_mode = MODE_SMART_SCHEDULE
-                    self._force_return = False
-                    self._schedule_state_at_override = None
+                    self._resume_schedule()
 
-        # 2. Safety Check: Sensor failure
-        if self._cur_temp is None:
-            _LOGGER.error(
-                "Emergency: All sensors offline for %s (configured: %s)",
-                self._name,
-                self._sensor_ids,
-            )
-            heater_on = (dt_util.now().minute % 10) == 0  # Minimal pulse
-            if scheduled and heater_on:
-                self._daily_usage_seconds += 60
-            await self._set_heaters(
-                switch_on=heater_on,
-                climate_active=heater_on,
-                target_temp=ANTI_FROST_TEMP if heater_on else None,
-            )
-            self._update_heating_power(1.0 if heater_on else 0.0)
-            return
-
-        # 3. Window delay: compute effective window_open from raw ajar state
-        # Any sensor ajar triggers the delay countdown; window is "open" once
-        # the first sensor passes the delay threshold.
-        any_ajar = any(self._window_states.values())
-        self._window_ajar = any_ajar
-        if any_ajar:
-            delay_min = float(self._entry.data.get(CONF_WINDOW_DELAY, 0))
-            now_ts = time.time()
-            window_open = False
-            for eid, is_ajar in self._window_states.items():
-                if not is_ajar:
-                    continue
-                since = self._window_ajar_since.get(eid)
-                if since is None:
-                    continue
-                elapsed_min = (now_ts - since) / 60
-                if delay_min <= 0 or elapsed_min >= delay_min:
-                    window_open = True
-                # Warn if this sensor has been open suspiciously long
-                hours_open = (now_ts - since) / 3600
-                if hours_open > 2 and not self._window_stuck_warned.get(eid, False):
-                    _LOGGER.warning(
-                        "%s: window sensor %s has been reporting open for %.0f hours. "
-                        "Check whether the sensor is stuck.",
-                        self._name,
-                        eid,
-                        hours_open,
-                    )
-                    self._window_stuck_warned[eid] = True
-            self._window_open = window_open
-        else:
-            self._window_open = False
-
-        # 4. Frost Guard (Priority over Window Open)
-        frost_risk = self._cur_temp < ANTI_FROST_TEMP
-
-        # 5. Compute effective target (pure read, no side effects)
+        await self._update_state()
+        self._update_force_return()
+        self._update_window_state()
+        self._failsafe_heating_active = self._cur_temp is None and dt_util.now().minute % 10 == 0
+        decision = self._control_decision()
+        target = decision.target
+        climate_active = decision.climate_active
+        switch_on = decision.heat_demand
+        frost_risk = self._cur_temp is not None and self._cur_temp < ANTI_FROST_TEMP
         effective_target = self._compute_effective_target()
 
-        # 6. Control Logic
-        if self._emergency_heat_active:
-            # Emergency cold override: force all heaters to maximum regardless of
-            # window state or hvac_mode. Activated via the global override switch.
-            target = self.max_temp
-            climate_active = True
-            switch_on = True
-        elif (
-            not self._heating_season_active
-            and not frost_risk
-        ):
-            # Off-season: no frost risk — behaviour depends on configured off-mode.
-            # Priority: emergency (above) > off-season > frost guard (else branch).
-            # The heating season switch is a master kill switch: it wins over manual
-            # overrides, schedules, and presence. If the user wants heating during
-            # off-season they must use the emergency heat switch.
-            # Vacation does NOT exclude off-season: in summer the boiler switch is off
-            # regardless, so OPEN mode is safe. When vacation is active we lower the
-            # TRV setpoint to ANTI_FROST_TEMP so electric-only setups don't heat.
-            # Frost protection still takes priority (handled by the else branch below).
-            offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
-            in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
-            if offmode == SEASON_OFFMODE_OPEN:
-                # Keep TRV valves exercised; switches stay off so the boiler never fires.
-                # If vacation is active, use a safe low setpoint instead of max_temp to
-                # prevent unintended heating on electric-only heater setups.
-                target = ANTI_FROST_TEMP if in_vacation else self.max_temp
-                climate_active = True
-                switch_on = False
-            elif offmode == SEASON_OFFMODE_FROST:
-                # Maintain a minimal anti-sticking temperature (7°C)
-                target = SEASON_OFF_FROST_TEMP
-                climate_active = True
-                switch_on = self._cur_temp < (SEASON_OFF_FROST_TEMP + 0.8)
-            else:  # SEASON_OFFMODE_OFF
-                target = None
-                climate_active = False
-                switch_on = False
-        else:
-            # Frost protection is unconditional: overrides hvac_mode=OFF and open windows
-            target = ANTI_FROST_TEMP if frost_risk else effective_target
-
-            # Climate entities (TRVs/AC): setpoint mode — Vesta decides whether heating
-            # should be active and sends the target temperature; the device manages its
-            # own valve/compressor internally.
-            climate_active = frost_risk or (
-                self._hvac_mode == HVACMode.HEAT and not self._window_open
-            )
-
-            # Switches and other simple heaters: bang-bang control — Vesta acts as the
-            # thermostat and decides when to turn the device on or off.
-            switch_on = False
-            if frost_risk:
-                switch_on = self._cur_temp < (ANTI_FROST_TEMP + 0.8)
-            elif self._hvac_mode == HVACMode.HEAT and not self._window_open:
-                switch_on = self._cur_temp < (effective_target - 0.2)
-
         # Count usage on scheduled ticks.
-        # For TRV-only setups switch_on is always False once the room reaches
-        # temperature (bang-bang logic stops at target-0.2°C), so use
-        # climate_active as the proxy instead to avoid systematic undercounting.
-        has_switches = any(eid.split(".")[0] != "climate" for eid in self._heaters)
-        usage_active = switch_on if has_switches else climate_active
+        # switch_on is the thermostat's actual heat demand for both switches and
+        # TRV-only rooms; climate_active merely means that a TRV is enabled.
+        usage_active = switch_on
         if scheduled:
             if usage_active:
                 self._daily_usage_seconds += 60
@@ -758,7 +719,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
             # Feature-specific savings tracking (time smart features kept temp lower)
             if (
-                not frost_risk
+                self._cur_temp is not None
+                and not frost_risk
                 and self._hvac_mode == HVACMode.HEAT
                 and self._heating_season_active
                 and not self._vacation_active
@@ -811,13 +773,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         await self._set_heaters(switch_on=switch_on, climate_active=climate_active, target_temp=target)
 
+        if self._removed:
+            return
+
         # 7. Update duty cycle — use TRV internal sensor for valve-openness estimate
         self._update_heating_power(
-            self._estimate_heater_power(switch_on, climate_active, target)
+            self._estimate_heater_power(target)
         )
 
         # 8. Hardware Failure Detection
-        self._check_hardware_performance()
+        if self._cur_temp is not None:
+            self._check_hardware_performance()
 
         # 9. Learning
         if not (
@@ -831,6 +797,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             or self._hardware_failure
         ):
             self._update_learning()
+        else:
+            # Do not learn from a sample spanning a manual/away/off-season gap.
+            self._last_learning_temp = None
+            self._last_learning_time = None
 
         self._savings_cache = self._compute_savings_est()
         self.async_write_ha_state()
@@ -862,9 +832,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # 500 m threshold filters out GPS noise between ticks
         approaching = self._nearest_distance < (self._last_nearest_distance - 500)
+        moving_away = self._nearest_distance > (self._last_nearest_distance + 500)
         self._last_nearest_distance = self._nearest_distance
 
-        if not approaching:
+        if moving_away:
+            self._force_return = False
+            return
+        if approaching:
+            self._approach_detected_at = time.time()
+        elif not self._force_return or time.time() - self._approach_detected_at > 600:
             self._force_return = False
             return
 
@@ -940,16 +916,19 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         if dt < 15:
             return
 
-        rate = abs((self._cur_temp - self._last_learning_temp) / max(dt, 0.1))
+        delta = self._cur_temp - self._last_learning_temp
+        rate = abs(delta / max(dt, 0.1))
+        self._last_learning_temp = self._cur_temp
+        self._last_learning_time = now
         # Clamping: ignore impossible values
         if rate < MIN_HEATING_RATE or rate > MAX_HEATING_RATE:
             return
 
-        if self._heating_power > 90:
+        if self._heating_power > 90 and delta > 0:
             self._heating_rate = (self._heating_rate * (1 - LEARNING_ALPHA)) + (
                 rate * LEARNING_ALPHA
             )
-        elif self._heating_power < 10:
+        elif self._heating_power < 10 and delta < 0:
             self._cooling_rate = (self._cooling_rate * (1 - LEARNING_ALPHA)) + (
                 rate * LEARNING_ALPHA
             )
@@ -974,10 +953,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         g = self.hass.data[DOMAIN].get("global")
         if not g:
             return {}
-        price = g.data.get(CONF_ENERGY_PRICE_KWH)
+        price = finite_float(g.data.get(CONF_ENERGY_PRICE_KWH))
         annual_data = g.data.get(CONF_ENERGY_ANNUAL_DATA) or {}
-        annual_kwh = annual_data.get(str(dt_util.now().year))
-        if not annual_kwh or not price or self._monthly_hdh_base <= 0:
+        annual_kwh = finite_float(annual_data.get(str(dt_util.now().year)))
+        if annual_kwh is None or price is None or annual_kwh < 0 or price < 0 or self._monthly_hdh_base <= 0:
             return {}
 
         hdh_saved = (
@@ -985,7 +964,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             + self._monthly_hdh_eco
             + self._monthly_hdh_window
         )
-        saved_fraction = min(hdh_saved / self._monthly_hdh_base, 1.0)
+        saved_fraction = max(0.0, min(hdh_saved / self._monthly_hdh_base, 1.0))
         saved_kwh = saved_fraction * float(annual_kwh) / 12
         price = float(price)
 
@@ -1021,49 +1000,77 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         Climate entities (TRVs, heat-pump ACs) use setpoint mode.
         Switches and other simple heaters use bang-bang control.
         """
-        any_climate_cmd = False
+        if target_temp is not None:
+            try:
+                numeric_target = float(target_temp)
+            except (TypeError, ValueError):
+                numeric_target = self.comfort_temp
+                _LOGGER.error(
+                    "%s: invalid control target %r; using comfort temperature",
+                    self._name,
+                    target_temp,
+                )
+            if not math.isfinite(numeric_target):
+                _LOGGER.error(
+                    "%s: non-finite control target %r; using comfort temperature",
+                    self._name,
+                    target_temp,
+                )
+                numeric_target = self.comfort_temp
+            bounded_target = min(MAX_SCHEDULE_TEMP, max(MIN_SCHEDULE_TEMP, numeric_target))
+            if bounded_target != numeric_target:
+                _LOGGER.warning(
+                    "%s: clamping control target %.1f°C to %.1f°C",
+                    self._name,
+                    numeric_target,
+                    bounded_target,
+                )
+            target_temp = bounded_target
 
         for eid in self._heaters:
+            if self._removed:
+                return
+            state = self.hass.states.get(eid)
+            if state is not None and state.state in ("unavailable", "unknown"):
+                self._heater_states.pop(eid, None)
+                self._heater_targets.pop(eid, None)
+                continue
             domain = eid.split(".")[0]
-            if domain == "climate":
-                prev_active = self._heater_states.get(eid)
-                prev_target = self._heater_targets.get(eid)
-                state_changed = prev_active != climate_active
-                target_changed = (
-                    climate_active
-                    and target_temp is not None
-                    and prev_target != target_temp
-                )
-                if state_changed:
-                    self._heater_states[eid] = climate_active
-                    if not climate_active:
-                        self._heater_targets[eid] = None
-                    any_climate_cmd = True  # grace period covers hvac_mode commands too
+            try:
+                if domain == "climate":
+                    desired_target = native_target(target_temp, state, hass=self.hass) if target_temp is not None else None
+                    state_changed = self._heater_states.get(eid) != climate_active
+                    target_changed = climate_active and desired_target is not None and self._heater_targets.get(eid) != desired_target
+                    if state_changed:
+                        self._last_heater_cmd_time = time.time()
+                        # Seed the expected setpoint before awaiting device callbacks.
+                        self._heater_targets[eid] = desired_target if climate_active else None
+                        await self.hass.services.async_call(
+                            "climate", "set_hvac_mode",
+                            {"entity_id": eid, "hvac_mode": "heat" if climate_active else "off"},
+                            blocking=True,
+                        )
+                        self._heater_states[eid] = climate_active
+                    if self._removed:
+                        return
+                    if climate_active and desired_target is not None and (state_changed or target_changed):
+                        self._last_heater_cmd_time = time.time()
+                        self._heater_targets[eid] = desired_target
+                        await self.hass.services.async_call(
+                            "climate", "set_temperature",
+                            {"entity_id": eid, "temperature": desired_target}, blocking=True,
+                        )
+                elif self._heater_states.get(eid) != switch_on:
                     await self.hass.services.async_call(
-                        "climate",
-                        "set_hvac_mode",
-                        {"entity_id": eid, "hvac_mode": "heat" if climate_active else "off"},
+                        "homeassistant", "turn_on" if switch_on else "turn_off",
+                        {"entity_id": eid}, blocking=True,
                     )
-                if climate_active and target_temp is not None and (state_changed or target_changed):
-                    self._heater_targets[eid] = target_temp
-                    any_climate_cmd = True
-                    await self.hass.services.async_call(
-                        "climate",
-                        "set_temperature",
-                        {"entity_id": eid, "temperature": target_temp},
-                    )
-            else:
-                prev_active = self._heater_states.get(eid)
-                if prev_active != switch_on:
                     self._heater_states[eid] = switch_on
-                    await self.hass.services.async_call(
-                        "homeassistant",
-                        "turn_on" if switch_on else "turn_off",
-                        {"entity_id": eid},
-                    )
-
-        if any_climate_cmd:
-            self._last_heater_cmd_time = time.time()
+            except Exception:
+                # One unavailable/broken actuator must not skip the remaining heaters.
+                self._heater_states.pop(eid, None)
+                self._heater_targets.pop(eid, None)
+                _LOGGER.exception("%s: command to %s failed; will retry", self._name, eid)
 
     # Standard HA Boilerplate & Dynamic Properties
     @property
@@ -1097,78 +1104,30 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     def max_temp(self) -> float:
         return 35.0
 
+    def _control_decision(self):
+        """Use one priority calculation for heaters, boiler and displayed state."""
+        target = min(self.max_temp, max(self.min_temp, finite_float(self._compute_effective_target(), 21.0)))
+        return decide_control(
+            temperature=self._cur_temp, target=target,
+            enabled=self._hvac_mode == HVACMode.HEAT, window_open=self._window_open,
+            emergency=self._emergency_heat_active, heating_season=self._heating_season_active,
+            offmode=self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN),
+            vacation=self._vacation_active or self._preset_mode == MODE_VACATION,
+            failsafe_pulse=self._failsafe_heating_active,
+        )
+
     @property
     def boiler_demand(self) -> bool:
-        """Return True when this room is actually requesting heat from the boiler.
+        """Use the same heat request sent to room actuators."""
+        return bool(self._heaters) and self._control_decision().heat_demand
 
-        Differs from _heater_states in off-season: OPEN mode keeps TRV valves
-        exercised (climate_active=True) but does NOT require boiler heat.
-        FROST mode actively heats to 7°C — the boiler is needed.
-
-        For TRV-only rooms: climate_active is True whenever HVAC=HEAT regardless
-        of whether the room is below its setpoint (TRVs manage their own valve
-        internally). Apply bang-bang logic here — same threshold as switch_on —
-        so the boiler shuts off when all rooms are satisfied and turns back on only
-        when a room drops below its effective target again.
-
-        For switch-based or mixed rooms: _heater_states[switch_eid] already uses
-        bang-bang (switch_on), so any active switch is a real heat request.
-        """
-        if self._emergency_heat_active:
-            return True
-        if not self._heating_season_active:
-            offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
-            if offmode == SEASON_OFFMODE_FROST:
-                return (
-                    self._cur_temp is not None
-                    and self._cur_temp < (SEASON_OFF_FROST_TEMP + 0.8)
-                )
-            return False  # OPEN = valve exercise only; OFF = nothing
-        # Switch-based heaters: _heater_states tracks bang-bang (switch_on).
-        # Any active switch is a real heat request — boiler must fire.
-        has_switches = any(eid.split(".")[0] != "climate" for eid in self._heaters)
-        if has_switches:
-            return any(
-                self._heater_states.get(eid, False)
-                for eid in self._heaters
-                if eid.split(".")[0] != "climate"
-            )
-        # TRV-only: derive demand from temperature delta (bang-bang, same as
-        # switch_on) so the boiler turns off when all rooms are at setpoint.
-        frost_risk = (
-            self._cur_temp is not None and self._cur_temp < (ANTI_FROST_TEMP + 0.8)
-        )
-        if self._hvac_mode != HVACMode.HEAT or self._window_open:
-            # HVAC=OFF or window open: only frost guard can demand heat.
-            return frost_risk
-        if frost_risk:
-            return True
-        effective = self._compute_effective_target()
-        if effective is None or self._cur_temp is None:
-            return False
-        return self._cur_temp < (effective - 0.2)
+    @property
+    def boiler_target_temperature(self) -> float:
+        return self._control_decision().target or ANTI_FROST_TEMP
 
     @property
     def target_temperature(self) -> float | None:
-        """Return the target temperature shown in the UI.
-
-        During off-season (without vacation/emergency) this reflects the actual
-        control target — not the schedule temperature — so the UI is consistent
-        with what the heaters are actually being commanded to do.
-        """
-        if self._emergency_heat_active:
-            return self.max_temp
-        if not self._heating_season_active:
-            offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
-            in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
-            if offmode == SEASON_OFFMODE_OPEN:
-                # Vacation lowers the setpoint to ANTI_FROST_TEMP (safety for electric heaters)
-                return ANTI_FROST_TEMP if in_vacation else self.max_temp
-            if offmode == SEASON_OFFMODE_FROST:
-                return SEASON_OFF_FROST_TEMP
-            # SEASON_OFFMODE_OFF: no target
-            return None
-        return self._compute_effective_target()
+        return self._control_decision().target
 
     # HA Schedule entity built-in attributes — not part of block additional data
     _SCHED_HA_ATTRS = frozenset(
@@ -1183,7 +1142,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         friendly_name). We just filter out the built-in HA attributes.
         """
         state = self.hass.states.get(schedule_entity_id)
-        if not state:
+        if not state or state.state != STATE_ON:
             return {}
         block_data = {
             k: v
@@ -1212,10 +1171,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         # Campo temp diretto
         if "temp" in block_data:
-            try:
-                return float(block_data["temp"])
-            except (ValueError, TypeError):
-                pass
+            return self._validated_schedule_temperature(
+                block_data["temp"], "Home Assistant schedule"
+            )
 
         # Campo mode
         mode = str(block_data.get("mode", "")).lower().strip()
@@ -1233,29 +1191,26 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
     async def _update_state(self):
         """Update internal state based on global settings, schedule, presence and weather."""
         g = self.hass.data[DOMAIN].get("global")
-        if not g:
-            if self._target_temp is None:
-                self._target_temp = 21.0
-            return
+        global_data = g.data if g else {}
 
         # Initialize target_temp from global comfort on first run
         if self._target_temp is None:
             self._target_temp = self.comfort_temp
 
         # 1. Vacation Mode (Global) — entity takes priority over static boolean
-        vacation_entity_id = g.data.get(CONF_VACATION_ENTITY)
+        vacation_status = global_data.get(CONF_VACATION_STATE, False)
+        self._vacation_active = (
+            vacation_status == "on" if isinstance(vacation_status, str)
+            else bool(vacation_status)
+        )
+        vacation_entity_id = global_data.get(CONF_VACATION_ENTITY)
         if vacation_entity_id:
             v_state = self.hass.states.get(vacation_entity_id)
-            self._vacation_active = v_state is not None and v_state.state == STATE_ON
-        else:
-            vacation_status = g.data.get(CONF_VACATION_STATE, False)
-            if isinstance(vacation_status, str):
-                self._vacation_active = vacation_status == "on"
-            else:
-                self._vacation_active = bool(vacation_status)
+            if v_state and v_state.state not in ("unknown", "unavailable"):
+                self._vacation_active = v_state.state == STATE_ON
 
         # 1b. Emergency Heat Override Switch (Global)
-        override_sw_id = g.data.get(CONF_OVERRIDE_SWITCH)
+        override_sw_id = global_data.get(CONF_OVERRIDE_SWITCH)
         if override_sw_id:
             sw_state = self.hass.states.get(override_sw_id)
             self._emergency_heat_active = sw_state is not None and sw_state.state == STATE_ON
@@ -1263,119 +1218,33 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._emergency_heat_active = False
 
         # 1c. Heating Season (Global) — entity takes priority over static boolean
-        season_entity_id = g.data.get(CONF_HEATING_SEASON_ENTITY)
+        season_status = global_data.get(CONF_HEATING_SEASON_ACTIVE, True)
+        self._heating_season_active = (
+            season_status == "on" if isinstance(season_status, str)
+            else bool(season_status)
+        )
+        season_entity_id = global_data.get(CONF_HEATING_SEASON_ENTITY)
         if season_entity_id:
             s_state = self.hass.states.get(season_entity_id)
-            self._heating_season_active = s_state is not None and s_state.state == STATE_ON
-        else:
-            season_status = g.data.get(CONF_HEATING_SEASON_ACTIVE, True)
-            if isinstance(season_status, str):
-                self._heating_season_active = season_status == "on"
-            else:
-                self._heating_season_active = bool(season_status)
-
-        # 2. Schedule Logic: dual-source (HA entity or Vesta native schedule)
-        source_type, sched_ref = self._resolve_schedule_source()
-
-        if source_type == "entity" and sched_ref and (s_state := self.hass.states.get(sched_ref)):
-            # -- HA entity schedule: manual revert detection --
-            if (
-                self._preset_mode == MODE_MANUAL
-                and self._schedule_state_at_override is not None
-                and s_state.state != self._schedule_state_at_override
-            ):
-                ovr_mode = self._get_manual_override_mode()
-                should_revert = (
-                    ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
-                    or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
-                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and s_state.state == STATE_ON)
-                )
-                if should_revert:
-                    _LOGGER.info(
-                        "Schedule changed for %s: reverting manual override (%s).",
-                        self._name,
-                        ovr_mode,
-                    )
-                    self._preset_mode = MODE_SMART_SCHEDULE
-                    self._force_return = False
-                    self._schedule_state_at_override = None
-                elif ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON:
-                    # Track the state transition: update snapshot to the current state so
-                    # the next ON transition can be detected and trigger the revert.
-                    # Example: override set during ON (snapshot="on") → schedule goes OFF
-                    # → update snapshot to "off" → next ON: "on" != "off" → revert.
-                    self._schedule_state_at_override = s_state.state
-
-            if self._preset_mode != MODE_MANUAL:
-                if self._preset_mode == MODE_AWAY:
-                    if self._hvac_mode == HVACMode.OFF:
-                        self._hvac_mode = HVACMode.HEAT
-                else:
-                    block_data = self._get_current_schedule_block_data(sched_ref)
-                    mode = str((block_data or {}).get("mode", "")).lower().strip()
-                    if mode == "off":
-                        self._hvac_mode = HVACMode.OFF
-                    else:
-                        if self._hvac_mode == HVACMode.OFF:
-                            self._hvac_mode = HVACMode.HEAT
-                        parsed_temp = self._parse_schedule_block_data(block_data)
-                        if parsed_temp is not None:
-                            self._target_temp = parsed_temp
-                        else:
-                            self._target_temp = (
-                                self.comfort_temp
-                                if s_state.state == STATE_ON
-                                else self.eco_temp
-                            )
-
-        elif source_type == "vesta" and sched_ref:
-            # -- Vesta native schedule --
-            vesta_mode = self._get_vesta_schedule_mode(sched_ref)
-
-            # Manual revert detection: compare mode string
-            if (
-                self._preset_mode == MODE_MANUAL
-                and self._schedule_state_at_override is not None
-                and vesta_mode != self._schedule_state_at_override
-            ):
-                ovr_mode = self._get_manual_override_mode()
-                should_revert = (
-                    ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
-                    or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
-                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and vesta_mode.lower() not in ("off",))
-                )
-                if should_revert:
-                    _LOGGER.info(
-                        "Vesta schedule changed for %s: reverting manual override (%s).",
-                        self._name,
-                        ovr_mode,
-                    )
-                    self._preset_mode = MODE_SMART_SCHEDULE
-                    self._force_return = False
-                    self._schedule_state_at_override = None
-                elif ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON:
-                    # Track the state transition so the next non-off event triggers revert.
-                    self._schedule_state_at_override = vesta_mode
-
-            if self._preset_mode != MODE_MANUAL:
-                if self._preset_mode == MODE_AWAY:
-                    # Away mode cannot be overridden by schedule; ensure heating stays on
-                    if self._hvac_mode == HVACMode.OFF:
-                        self._hvac_mode = HVACMode.HEAT
-                else:
-                    self._apply_vesta_schedule_mode(vesta_mode)
+            if s_state and s_state.state not in ("unknown", "unavailable"):
+                self._heating_season_active = s_state.state == STATE_ON
 
         # 3. Presence & Geofencing
         presence_ids = (
             self._entry.data.get(CONF_PRESENCE_SENSORS)
             if self._entry.data.get(CONF_OVERRIDE_PRESENCE)
-            else g.data.get(CONF_PRESENCE_SENSORS)
+            else global_data.get(CONF_PRESENCE_SENSORS)
         )
         if presence_ids:
             any_home = False
             min_dist: float | None = None
+            all_known = True
             for pid in presence_ids:
-                if p_state := self.hass.states.get(pid):
+                p_state = self.hass.states.get(pid)
+                if p_state is None or p_state.state in ("unknown", "unavailable"):
+                    all_known = False
+                    continue
+                if p_state:
                     if p_state.state in ("home", STATE_ON):
                         any_home = True
                         min_dist = 0.0
@@ -1406,6 +1275,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 self._nearest_distance = min_dist
             ovr_mode = self._get_manual_override_mode()
 
+            if not any_home and not all_known:
+                any_home = self._was_any_home
+
             if any_home:
                 if self._manual_paused_for_away:
                     # Returning home while manual override was paused for away.
@@ -1414,14 +1286,13 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     # check a paused timer. Clearing it first would always return 0.
                     paused_timeout = self._get_manual_timeout()
                     self._manual_paused_for_away = False
+                    self._away_set_by_presence = False
                     if ovr_mode == MANUAL_OVERRIDE_ON_ARRIVAL:
                         _LOGGER.info(
                             "Arrival for %s: reverting paused override (on_arrival) → schedule.",
                             self._name,
                         )
-                        self._preset_mode = MODE_SMART_SCHEDULE
-                        self._force_return = False
-                        self._schedule_state_at_override = None
+                        self._resume_schedule()
                     elif ovr_mode in (MANUAL_OVERRIDE_TIMER, MANUAL_OVERRIDE_TIMER_OR_SCHEDULE):
                         if paused_timeout > 0:
                             _LOGGER.info(
@@ -1435,9 +1306,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                                 "Arrival for %s: paused override timer expired → schedule.",
                                 self._name,
                             )
-                            self._preset_mode = MODE_SMART_SCHEDULE
-                            self._force_return = False
-                            self._schedule_state_at_override = None
+                            self._resume_schedule()
                     else:
                         # next_schedule / next_schedule_on: resume and let section 2 check
                         _LOGGER.info(
@@ -1462,9 +1331,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     _LOGGER.info(
                         "Arrival for %s: reverting manual override (on_arrival).", self._name
                     )
-                    self._preset_mode = MODE_SMART_SCHEDULE
-                    self._force_return = False
-                    self._schedule_state_at_override = None
+                    self._resume_schedule()
             elif self._preset_mode == MODE_MANUAL:
                 if self._is_external_override:
                     # Physical TRV override: immune to departure/presence transitions.
@@ -1498,27 +1365,226 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                     self._force_return = False
                     self._away_set_by_presence = True
                 # permanent or already-away manual override: stay in manual regardless
-            elif self._preset_mode not in (MODE_VACATION,):
+            elif self._preset_mode == MODE_SMART_SCHEDULE and all_known:
                 self._preset_mode = MODE_AWAY
                 self._force_return = False
                 self._away_set_by_presence = True
 
             self._was_any_home = any_home
 
-        # 4. Weather / Outdoor Temperature
+        else:
+            self._force_return = False
+            self._nearest_distance = 0.0
+            if self._away_set_by_presence:
+                self._preset_mode = MODE_SMART_SCHEDULE
+                self._away_set_by_presence = False
+                self._manual_paused_for_away = False
+
+        self._update_schedule()
+        if self._user_hvac_off:
+            self._hvac_mode = HVACMode.OFF
+
         weather_id = (
             self._entry.data.get(CONF_WEATHER)
             if self._entry.data.get(CONF_OVERRIDE_WEATHER)
-            else g.data.get(CONF_WEATHER)
+            else global_data.get(CONF_WEATHER)
         )
-        if weather_id:
-            if w_state := self.hass.states.get(weather_id):
-                temp = w_state.attributes.get("temperature")
-                if temp is not None:
-                    try:
-                        self._outdoor_temp = float(temp)
-                    except (ValueError, TypeError):
-                        pass
+        self._outdoor_temp = as_celsius(self.hass.states.get(weather_id), "temperature") if weather_id else None
+
+    def _update_schedule(self):
+        """Resolve schedule transitions after manual/presence transitions."""
+        # 2. Schedule Logic: dual-source (HA entity or Vesta native schedule)
+        source_type, sched_ref = self._resolve_schedule_source()
+
+        marker = self._schedule_marker(source_type, sched_ref)
+        # Older releases persisted just "on"/"off" or a native mode. Adopt
+        # the current block if that mode is unchanged, so upgrading does not
+        # immediately cancel an otherwise valid manual override.
+        saved_marker = self._schedule_state_at_override
+        if isinstance(saved_marker, str) and "|" not in saved_marker and marker is not None:
+            state = self.hass.states.get(sched_ref) if source_type == "entity" else None
+            current_mode = state.state if state else self._get_vesta_schedule_mode(sched_ref)
+            if saved_marker == current_mode:
+                self._schedule_state_at_override = marker
+        if source_type == "entity" and sched_ref and (s_state := self.hass.states.get(sched_ref)) and s_state.state not in ("unknown", "unavailable"):
+            # -- HA entity schedule: manual revert detection --
+            if (
+                self._preset_mode == MODE_MANUAL
+                and self._schedule_state_at_override is not None
+                and marker != self._schedule_state_at_override
+            ):
+                ovr_mode = self._get_manual_override_mode()
+                should_revert = (
+                    ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
+                    or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
+                    or (
+                        ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON
+                        and s_state.state == STATE_ON
+                        and str(self._get_current_schedule_block_data(sched_ref).get("mode", "")).lower().strip() != "off"
+                    )
+                )
+                if should_revert:
+                    _LOGGER.info(
+                        "Schedule changed for %s: reverting manual override (%s).",
+                        self._name,
+                        ovr_mode,
+                    )
+                    self._resume_schedule()
+                elif ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON:
+                    # Track the state transition: update snapshot to the current state so
+                    # the next ON transition can be detected and trigger the revert.
+                    # Example: override set during ON (snapshot="on") → schedule goes OFF
+                    # → update snapshot to "off" → next ON: "on" != "off" → revert.
+                    self._schedule_state_at_override = marker
+
+            if self._preset_mode != MODE_MANUAL:
+                if self._preset_mode in (MODE_AWAY, MODE_VACATION):
+                    if self._hvac_mode == HVACMode.OFF:
+                        self._hvac_mode = HVACMode.HEAT
+                else:
+                    block_data = self._get_current_schedule_block_data(sched_ref)
+                    mode = str((block_data or {}).get("mode", "")).lower().strip()
+                    if mode == "off":
+                        self._hvac_mode = HVACMode.OFF
+                    else:
+                        if self._hvac_mode == HVACMode.OFF:
+                            self._hvac_mode = HVACMode.HEAT
+                        parsed_temp = self._parse_schedule_block_data(block_data)
+                        if parsed_temp is not None:
+                            self._target_temp = parsed_temp
+                        else:
+                            self._target_temp = (
+                                self.comfort_temp
+                                if s_state.state == STATE_ON
+                                else self.eco_temp
+                            )
+
+        elif source_type == "vesta" and sched_ref:
+            # -- Vesta native schedule --
+            vesta_mode = self._get_vesta_schedule_mode(sched_ref)
+
+            # Manual revert detection: compare mode string
+            if (
+                self._preset_mode == MODE_MANUAL
+                and self._schedule_state_at_override is not None
+                and marker != self._schedule_state_at_override
+            ):
+                ovr_mode = self._get_manual_override_mode()
+                should_revert = (
+                    ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE
+                    or ovr_mode == MANUAL_OVERRIDE_TIMER_OR_SCHEDULE
+                    or (ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON and vesta_mode.lower() not in ("off",))
+                )
+                if should_revert:
+                    _LOGGER.info(
+                        "Vesta schedule changed for %s: reverting manual override (%s).",
+                        self._name,
+                        ovr_mode,
+                    )
+                    self._resume_schedule()
+                elif ovr_mode == MANUAL_OVERRIDE_NEXT_SCHEDULE_ON:
+                    # Track the state transition so the next non-off event triggers revert.
+                    self._schedule_state_at_override = marker
+
+            if self._preset_mode != MODE_MANUAL:
+                if self._preset_mode in (MODE_AWAY, MODE_VACATION):
+                    # Away mode cannot be overridden by schedule; ensure heating stays on
+                    if self._hvac_mode == HVACMode.OFF:
+                        self._hvac_mode = HVACMode.HEAT
+                else:
+                    self._apply_vesta_schedule_mode(vesta_mode)
+
+        elif source_type is None and self._preset_mode == MODE_SMART_SCHEDULE:
+            self._target_temp = self.comfort_temp
+            self._hvac_mode = HVACMode.HEAT
+
+    def _restore_state(self, old):
+        """Restore finite persisted values before reading current device state."""
+        self._heating_rate = max(MIN_HEATING_RATE, min(MAX_HEATING_RATE, finite_float(old.attributes.get(ATTR_HEATING_RATE), self._heating_rate)))
+        self._cooling_rate = max(MIN_HEATING_RATE, min(MAX_HEATING_RATE, finite_float(old.attributes.get(ATTR_COOLING_RATE), self._cooling_rate)))
+        daily = {
+            "_daily_usage_seconds": (ATTR_DAILY_USAGE, 60),
+            "_daily_away_s": (ATTR_SAVED_AWAY_H_TODAY, 3600),
+            "_daily_window_s": (ATTR_SAVED_WINDOW_H_TODAY, 3600),
+            "_daily_eco_s": (ATTR_SAVED_ECO_H_TODAY, 3600),
+        }
+        for key, (legacy, factor) in daily.items():
+            fallback = finite_float(old.attributes.get(legacy), 0) * factor
+            setattr(self, key, max(0, finite_float(old.attributes.get(key), fallback)))
+        for key in (
+            "_monthly_actual_heating_s", "_monthly_away_s", "_monthly_window_s",
+            "_monthly_eco_s", "_monthly_hdh_away", "_monthly_hdh_window",
+            "_monthly_hdh_eco", "_monthly_hdh_base",
+        ):
+            setattr(self, key, max(0, finite_float(old.attributes.get(key), 0)))
+        month = finite_float(old.attributes.get("_last_savings_reset_month"))
+        self._last_savings_reset_month = int(month) if month is not None else None
+        self._schedule_state_at_override = old.attributes.get(
+            "_schedule_state_at_override"
+        )
+        self._manual_paused_for_away = bool(
+            old.attributes.get("_manual_paused_for_away", False)
+        )
+        self._is_external_override = bool(
+            old.attributes.get("_is_external_override", False)
+        )
+        # Default to True when restoring MODE_AWAY without the saved attribute
+        # (backward compat: old installs didn't persist this flag).
+        self._away_set_by_presence = bool(
+            old.attributes.get(
+                "_away_set_by_presence",
+                old.attributes.get("preset_mode") == MODE_AWAY,
+            )
+        )
+        self._was_any_home = bool(
+            old.attributes.get("_was_any_home", False)
+        )
+
+        self._user_hvac_off = bool(old.attributes.get("_user_hvac_off", False))
+        if old.state in (HVACMode.HEAT, HVACMode.OFF):
+            self._hvac_mode = HVACMode(old.state)
+
+        restored_preset = old.attributes.get("preset_mode")
+        if restored_preset in self._attr_preset_modes:
+            self._preset_mode = restored_preset
+
+        restored_target = old.attributes.get("target_temp")
+        if restored_target is not None:
+            try:
+                self._target_temp = finite_float(restored_target)
+            except (ValueError, TypeError):
+                pass
+
+        restored_manual_time = old.attributes.get("manual_start_time")
+        if (
+            restored_manual_time is not None
+            and (self._preset_mode == MODE_MANUAL or self._manual_paused_for_away)
+        ):
+            try:
+                self._manual_start_time = finite_float(restored_manual_time)
+            except (ValueError, TypeError):
+                pass
+
+        # Restore daily reset date so _check_daily_reset doesn't skip today's reset
+        _raw_reset_date = old.attributes.get("_last_usage_reset_date")
+        if _raw_reset_date:
+            try:
+                from datetime import date as _date
+                self._last_usage_reset_date = _date.fromisoformat(_raw_reset_date)
+            except (ValueError, TypeError):
+                pass
+
+        if (
+            old.state not in ("unknown", "unavailable")
+            and self._cur_temp is None
+        ):
+            try:
+                self._cur_temp = float(
+                    old.attributes.get("current_temperature") or old.state
+                )
+            except (ValueError, TypeError):
+                pass
+
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -1527,91 +1593,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
         old = await self.async_get_last_state()
         if old:
-            self._heating_rate = old.attributes.get(
-                ATTR_HEATING_RATE, self._heating_rate
-            )
-            self._cooling_rate = old.attributes.get(
-                ATTR_COOLING_RATE, self._cooling_rate
-            )
-            self._daily_usage_seconds = int(
-                old.attributes.get(ATTR_DAILY_USAGE, 0) * 60
-            )
-            self._monthly_actual_heating_s = int(
-                old.attributes.get("_monthly_actual_heating_s", 0)
-            )
-            self._monthly_away_s = int(old.attributes.get("_monthly_away_s", 0))
-            self._monthly_window_s = int(old.attributes.get("_monthly_window_s", 0))
-            self._monthly_eco_s = int(old.attributes.get("_monthly_eco_s", 0))
-            self._monthly_hdh_away = float(old.attributes.get("_monthly_hdh_away", 0.0))
-            self._monthly_hdh_window = float(old.attributes.get("_monthly_hdh_window", 0.0))
-            self._monthly_hdh_eco = float(old.attributes.get("_monthly_hdh_eco", 0.0))
-            self._monthly_hdh_base = float(old.attributes.get("_monthly_hdh_base", 0.0))
-            _raw_month = old.attributes.get("_last_savings_reset_month")
-            self._last_savings_reset_month = int(_raw_month) if _raw_month is not None else None
-            self._schedule_state_at_override = old.attributes.get(
-                "_schedule_state_at_override"
-            )
-            self._manual_paused_for_away = bool(
-                old.attributes.get("_manual_paused_for_away", False)
-            )
-            self._is_external_override = bool(
-                old.attributes.get("_is_external_override", False)
-            )
-            # Default to True when restoring MODE_AWAY without the saved attribute
-            # (backward compat: old installs didn't persist this flag).
-            self._away_set_by_presence = bool(
-                old.attributes.get(
-                    "_away_set_by_presence",
-                    old.attributes.get("preset_mode") == MODE_AWAY,
-                )
-            )
-            self._was_any_home = bool(
-                old.attributes.get("_was_any_home", False)
-            )
-
-            if old.state in (HVACMode.HEAT, HVACMode.OFF):
-                self._hvac_mode = HVACMode(old.state)
-
-            restored_preset = old.attributes.get("preset_mode")
-            if restored_preset in self._attr_preset_modes:
-                self._preset_mode = restored_preset
-
-            restored_target = old.attributes.get("target_temp")
-            if restored_target is not None:
-                try:
-                    self._target_temp = float(restored_target)
-                except (ValueError, TypeError):
-                    pass
-
-            restored_manual_time = old.attributes.get("manual_start_time")
-            if (
-                restored_manual_time is not None
-                and (self._preset_mode == MODE_MANUAL or self._manual_paused_for_away)
-            ):
-                try:
-                    self._manual_start_time = float(restored_manual_time)
-                except (ValueError, TypeError):
-                    pass
-
-            # Restore daily reset date so _check_daily_reset doesn't skip today's reset
-            _raw_reset_date = old.attributes.get("_last_usage_reset_date")
-            if _raw_reset_date:
-                try:
-                    from datetime import date as _date
-                    self._last_usage_reset_date = _date.fromisoformat(_raw_reset_date)
-                except (ValueError, TypeError):
-                    pass
-
-            if (
-                old.state not in ("unknown", "unavailable")
-                and self._cur_temp is None
-            ):
-                try:
-                    self._cur_temp = float(
-                        old.attributes.get("current_temperature") or old.state
-                    )
-                except (ValueError, TypeError):
-                    pass
+            self._restore_state(old)
 
         for sid in self._sensor_ids:
             if state := self.hass.states.get(sid):
@@ -1627,15 +1609,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         # survives a restart (otherwise a briefly-open window would reset the
         # delay and potentially allow a heating pulse with the window open).
         _saved_ajar_since = (
-            old.attributes.get("_window_ajar_since", {}) if old else {}
+            (old.attributes.get("_window_ajar_since") or {}) if old else {}
         )
+        if not isinstance(_saved_ajar_since, dict):
+            _saved_ajar_since = {}
         for eid in self._window_sensor_ids:
             ws = self.hass.states.get(eid)
             if ws and ws.state == STATE_ON:
                 self._window_states[eid] = True
                 saved_ts = _saved_ajar_since.get(eid)
                 self._window_ajar_since[eid] = (
-                    float(saved_ts) if saved_ts is not None else time.time()
+                    min(time.time(), max(0, finite_float(saved_ts, time.time())))
                 )
             else:
                 self._window_states[eid] = False
@@ -1650,7 +1634,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._heater_states[eid] = self._heater_active(state)
             if eid.split(".")[0] == "climate":
                 t = state.attributes.get("temperature") if state else None
-                self._heater_targets[eid] = float(t) if t is not None else None
+                self._heater_targets[eid] = finite_float(t)
 
         # Only set the default date if it wasn't restored from state above
         if self._last_usage_reset_date is None:
@@ -1690,14 +1674,18 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""
+        self._removed = True
         for listener in self._event_listeners:
             listener()
         self._event_listeners = []
         if self in self.hass.data[DOMAIN]["rooms"]:
             self.hass.data[DOMAIN]["rooms"].remove(self)
-        self.hass.data[DOMAIN].get("climate_entities_by_entry", {}).pop(
-            self._entry.entry_id, None
-        )
+        entities = self.hass.data[DOMAIN].get("climate_entities_by_entry", {})
+        if entities.get(self._entry.entry_id) is self:
+            entities.pop(self._entry.entry_id)
+        coordinator = self.hass.data[DOMAIN].get("boiler_coordinator")
+        if coordinator:
+            await coordinator.async_update(self.hass.data[DOMAIN]["rooms"])
         await super().async_will_remove_from_hass()
 
     def _setup_listeners(self):
@@ -1799,8 +1787,15 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         """Update per-entity state when a heater changes externally."""
         s = event.data.get("new_state")
         if not s:
+            eid = event.data.get("entity_id")
+            self._heater_states.pop(eid, None)
+            self._heater_targets.pop(eid, None)
             return
         eid = s.entity_id
+        if s.state in ("unknown", "unavailable"):
+            self._heater_states.pop(eid, None)
+            self._heater_targets.pop(eid, None)
+            return
         prev_active = self._heater_states.get(eid)
         self._heater_states[eid] = self._heater_active(s)
 
@@ -1830,14 +1825,14 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 #   - Stale state reports arriving right after another TRV changed
                 trv_target = s.attributes.get("temperature")
                 known_target = self._heater_targets.get(eid)
+                now = time.time()
+                in_cmd_grace = (now - self._last_heater_cmd_time) < 60
+                in_ext_grace = (now - self._last_external_override_time) < 30
                 if trv_target is not None and known_target is not None:
                     try:
                         trv_temp = float(trv_target)
                         diff = abs(trv_temp - known_target)
                         if diff > 0.1:
-                            now = time.time()
-                            in_cmd_grace = (now - self._last_heater_cmd_time) < 60
-                            in_ext_grace = (now - self._last_external_override_time) < 30
                             # in_ext_grace covers multi-TRV debounce: a second TRV in
                             # the same room may report a different (possibly large) value
                             # right after an external override — always absorb those.
@@ -1850,7 +1845,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                                 # Accept TRV's rounded/acknowledged value for this entity only
                                 self._heater_targets[eid] = trv_temp
                             else:
-                                self._handle_external_temp_override(trv_temp)
+                                self._handle_external_temp_override(as_celsius(s, "temperature", hass=self.hass))
                     except (ValueError, TypeError):
                         pass
                 elif (
@@ -1860,12 +1855,9 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
                 ):
                     # TRV was OFF (no known target); user turned it ON physically.
                     # Treat as an external override if not within a Vesta command grace period.
-                    now = time.time()
-                    in_cmd_grace = (now - self._last_heater_cmd_time) < 60
-                    in_ext_grace = (now - self._last_external_override_time) < 30
                     if not in_cmd_grace and not in_ext_grace:
                         try:
-                            self._handle_external_temp_override(float(trv_target))
+                            self._handle_external_temp_override(as_celsius(s, "temperature", hass=self.hass))
                         except (ValueError, TypeError):
                             pass
 
@@ -1883,17 +1875,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @callback
     def _on_sensor(self, event):
-        s = event.data.get("new_state")
-        if s:
-            if s.state not in ("unknown", "unavailable"):
-                try:
-                    self._sensor_readings[s.entity_id] = float(s.state)
-                except (ValueError, TypeError):
-                    self._sensor_readings[s.entity_id] = None
-            else:
-                self._sensor_readings[s.entity_id] = None
-            self._cur_temp = self._compute_cur_temp()
-            self.async_write_ha_state()
+        self._cur_temp = self._compute_cur_temp()
+        self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_window(self, event):
@@ -1915,28 +1898,12 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             self._window_stuck_warned.pop(eid, None)
             if not any(self._window_states.values()):
                 self._window_open = False
-                self._window_ajar = False
         self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_weather(self, event):
-        """Update outdoor temperature from weather entity."""
-        s = event.data.get("new_state")
-        if s:
-            if s.state in ("unavailable", "unknown"):
-                self._outdoor_temp = None
-                self.async_write_ha_state()
-                return
-            temp = s.attributes.get("temperature")
-            if temp is not None:
-                try:
-                    self._outdoor_temp = float(temp)
-                    self.hass.async_create_task(self._async_tick(None))
-                except (ValueError, TypeError):
-                    pass
-            else:
-                self._outdoor_temp = None
-                self.async_write_ha_state()
+        self._outdoor_temp = as_celsius(event.data.get("new_state"), "temperature")
+        self.hass.async_create_task(self._async_tick(None))
 
     @callback
     def _on_vacation_entity(self, event):
@@ -1955,9 +1922,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         if (t := kwargs.get(ATTR_TEMPERATURE)) is not None:
-            self._target_temp = float(
-                max(self.min_temp, min(self.max_temp, float(t)))
-            )
+            temperature = finite_float(t)
+            if temperature is None:
+                raise ValueError("Temperature must be finite")
+            self._target_temp = max(self.min_temp, min(self.max_temp, temperature))
+            self._user_hvac_off = False
             self._preset_mode = MODE_MANUAL
             self._hvac_mode = HVACMode.HEAT  # setting a temperature always implies intent to heat
             self._force_return = False
@@ -1984,36 +1953,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     @property
     def hvac_action(self) -> HVACAction:
+        decision = self._control_decision()
+        if decision.heat_demand:
+            return HVACAction.HEATING
         if self._hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
-        if self._cur_temp is not None:
-            frost_risk = self._cur_temp < ANTI_FROST_TEMP
-            # Frost protection and emergency heat are unconditional
-            if frost_risk or self._emergency_heat_active:
-                return HVACAction.HEATING
-            # Off-season: master kill switch wins over manual mode too
-            if not self._heating_season_active:
-                offmode = self._get_global(CONF_HEATING_SEASON_OFFMODE, SEASON_OFFMODE_OPEN)
-                in_vacation = self._vacation_active or self._preset_mode == MODE_VACATION
-                # FROST off-season mode actively heats to 7°C: report correctly.
-                # In vacation+OPEN mode the TRV is at ANTI_FROST_TEMP (5°C), not max_temp,
-                # so use the frost_risk threshold already handled above.
-                if offmode == SEASON_OFFMODE_FROST:
-                    frost_threshold = SEASON_OFF_FROST_TEMP + 0.8
-                elif in_vacation:
-                    # OPEN+vacation: TRV at 5°C — frost_risk already covers < 5°C
-                    frost_threshold = None
-                else:
-                    frost_threshold = None
-                if frost_threshold is not None and self._cur_temp < frost_threshold:
-                    return HVACAction.HEATING
-                return HVACAction.IDLE
-            # Normal in-season heating
-            if (
-                not self._window_open
-                and self._cur_temp < (self._compute_effective_target() - 0.2)
-            ):
-                return HVACAction.HEATING
         return HVACAction.IDLE
 
     @property
@@ -2021,10 +1965,17 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return self._preset_mode
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        if hvac_mode not in self._attr_hvac_modes:
+            raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
+        self._user_hvac_off = hvac_mode == HVACMode.OFF
         self._hvac_mode = hvac_mode
         await self._async_tick(None)
 
     async def async_set_preset_mode(self, m: str) -> None:
+        if m not in self._attr_preset_modes:
+            raise ValueError(f"Unsupported preset: {m}")
+        self._user_hvac_off = False
+        self._hvac_mode = HVACMode.HEAT
         self._preset_mode = m
         self._force_return = False
         self._is_external_override = False  # explicit UI action clears the flag
