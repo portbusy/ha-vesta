@@ -1695,6 +1695,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             await coordinator.async_update(self.hass.data[DOMAIN]["rooms"])
         await super().async_will_remove_from_hass()
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes."""
+        super().async_entity_id_changed(old_entity_id)
+
     def _setup_listeners(self):
         for listener in self._event_listeners:
             listener()
