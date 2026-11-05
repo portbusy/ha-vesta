@@ -35,7 +35,7 @@ async def test_actuators_boiler_and_ui_agree(hass, temperature, off, season, win
     assert room.boiler_demand is expected
     assert (room.hvac_action == HVACAction.HEATING) is expected
     if temperature < 5:
-        assert room.target_temperature == room.boiler_target_temperature == 5
+        assert room.native_target_temperature == room.boiler_target_temperature == 5
 
 
 async def test_off_survives_active_schedule_and_heat_resumes(hass):
@@ -47,7 +47,7 @@ async def test_off_survives_active_schedule_and_heat_resumes(hass):
     assert room.hvac_mode == HVACMode.OFF
     assert not room.boiler_demand
     await room.async_set_hvac_mode(HVACMode.HEAT)
-    assert room.target_temperature == 23
+    assert room.native_target_temperature == 23
     assert room.boiler_demand
 
 
@@ -60,7 +60,7 @@ async def test_manual_expiry_applies_current_schedule_in_same_tick(hass):
     room._set_heaters = AsyncMock()
     await room._async_tick(None)
     assert room.preset_mode == "smart_schedule"
-    assert room.target_temperature == 19
+    assert room.native_target_temperature == 19
 
 
 async def test_manual_away_survives_departure_and_arrival(hass):
@@ -91,7 +91,7 @@ async def test_vacation_does_not_turn_off_during_off_schedule_block(hass):
     room._set_heaters = AsyncMock()
     await room.async_set_preset_mode("vacation")
     assert room.hvac_mode == HVACMode.HEAT
-    assert room.target_temperature == 5
+    assert room.native_target_temperature == 5
 
 
 async def test_failed_heater_is_retried_without_skipping_other_heaters(hass, monkeypatch):
@@ -159,7 +159,7 @@ async def test_adjacent_identical_blocks_end_manual_override(hass, monkeypatch):
     monkeypatch.setattr(climate.dt_util, "now", lambda: datetime(2026, 9, 21, 8, 0))
     await room._async_tick(None)
     assert room.preset_mode == "smart_schedule"
-    assert room.target_temperature == 21
+    assert room.native_target_temperature == 21
 
 
 async def test_weather_unavailable_does_not_reuse_stale_attributes(hass):
@@ -199,7 +199,7 @@ async def test_inactive_ha_schedule_ignores_stale_block_data(hass):
     room = make_room(hass, {"schedule_entity": "schedule.house"})
     hass.states.async_set("schedule.house", "off", {"temp": 30, "mode": "off"})
     await room._update_state()
-    assert room.target_temperature == room.eco_temp
+    assert room.native_target_temperature == room.eco_temp
     assert room.hvac_mode == HVACMode.HEAT
 
 

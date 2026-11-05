@@ -852,7 +852,7 @@ class VestaPanel extends HTMLElement {
     return `
       :host { display: block; height: 100%; font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
       * { box-sizing: border-box; }
-      .app { display: flex; height: 100%; background: var(--primary-background-color, #f5f5f5); overflow: hidden; }
+      .app { display: flex; height: 100%; background: var(--ha-panel-background, var(--primary-background-color, #f5f5f5)); overflow: hidden; }
 
       /* Sidebar */
       .sidebar { width: 240px; min-width: 200px; background: var(--card-background-color, #fff);

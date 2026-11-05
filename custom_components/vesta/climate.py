@@ -104,6 +104,10 @@ from .temperature import as_celsius, finite_float, native_target
 
 _LOGGER = logging.getLogger(__name__)
 
+# Home Assistant 2026.11 renamed the temperature properties implemented by
+# climate integrations to native_*; older releases only know the plain names.
+_HAS_NATIVE_TEMPERATURE = hasattr(ClimateEntity, "native_current_temperature")
+
 # Constants
 ANTI_FROST_TEMP = 5.0
 SEASON_OFF_FROST_TEMP = 7.0
@@ -131,7 +135,10 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "smart_climate_pro"
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    if _HAS_NATIVE_TEMPERATURE:
+        _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+    else:
+        _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_preset_modes = [MODE_SMART_SCHEDULE, MODE_MANUAL, MODE_AWAY, MODE_VACATION]
     _attr_supported_features = (
@@ -1126,7 +1133,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return self._control_decision().target or ANTI_FROST_TEMP
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         return self._control_decision().target
 
     # HA Schedule entity built-in attributes — not part of block additional data
@@ -1688,6 +1695,11 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
             await coordinator.async_update(self.hass.data[DOMAIN]["rooms"])
         await super().async_will_remove_from_hass()
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes."""
+        super().async_entity_id_changed(old_entity_id)
+
     def _setup_listeners(self):
         for listener in self._event_listeners:
             listener()
@@ -1944,7 +1956,7 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         return g.data.get(key, default) if g else default
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         return self._cur_temp
 
     @property
@@ -1988,3 +2000,8 @@ class SmartClimatePro(ClimateEntity, RestoreEntity):
         else:
             self._schedule_state_at_override = None
         await self._async_tick(None)
+
+    if not _HAS_NATIVE_TEMPERATURE:
+        # Home Assistant < 2026.11 reads the plain property names.
+        current_temperature = native_current_temperature
+        target_temperature = native_target_temperature
