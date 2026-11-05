@@ -19,9 +19,9 @@ def test_shim_matches_installed_home_assistant():
     if has_native:
         for name in _LEGACY_NAMES:
             assert name not in SmartClimatePro.__dict__, name
-        assert SmartClimatePro.__dict__["_attr_native_temperature_unit"] == UnitOfTemperature.CELSIUS
+        assert object.__new__(SmartClimatePro)._attr_native_temperature_unit == UnitOfTemperature.CELSIUS
     else:
-        assert SmartClimatePro.__dict__["_attr_temperature_unit"] == UnitOfTemperature.CELSIUS
+        assert object.__new__(SmartClimatePro)._attr_temperature_unit == UnitOfTemperature.CELSIUS
         assert SmartClimatePro.__dict__["current_temperature"] is SmartClimatePro.__dict__["native_current_temperature"]
         assert SmartClimatePro.__dict__["target_temperature"] is SmartClimatePro.__dict__["native_target_temperature"]
         assert "_attr_native_temperature_unit" not in SmartClimatePro.__dict__
