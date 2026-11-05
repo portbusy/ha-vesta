@@ -1,6 +1,9 @@
 {
   "domain": "vesta",
   "name": "Vesta",
+  "categories": [
+    "climate.thermostats_heating"
+  ],
   "codeowners": [
     "@portbusy"
   ],
